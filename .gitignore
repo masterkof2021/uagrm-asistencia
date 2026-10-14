@@ -1,4 +1,8 @@
 node_modules/
+
+# Claves SSH locales: nunca forman parte del repositorio
+github.key
+github.key.pub
 .env
 tmp/
 coverage/

@@ -1,0 +1,10 @@
+node_modules/
+.env
+tmp/
+coverage/
+
+# Configuración y credenciales locales
+.env
+.env.frontend
+.env.backend
+node_modules/

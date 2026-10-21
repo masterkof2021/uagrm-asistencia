@@ -1,3 +1,5 @@
+> **Nota:** este proyecto crea el bucket S3 del autor original (cuenta `222234418877`) y no se usa en este despliegue, que utiliza un backend local. Para usarlo en otra cuenta habría que cambiar el nombre del bucket y `allowedAccountIds` en `index.ts`.
+
 # Backend S3 compartido de Pulumi
 
 Proyecto independiente `asistencia-state-backend`, stack `shared`, que administra seis recursos S3 protegidos contra eliminación. El laboratorio sigue en el proyecto `asistencia-infra`, stack `lab`.

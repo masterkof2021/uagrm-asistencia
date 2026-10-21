@@ -2,22 +2,14 @@
 
 Equivalente en TypeScript de los 18 recursos del módulo raíz de `../../../terraform/` (`config.tf`, `network.tf`, `compute.tf` y `outputs.tf`). Este programa es independiente de Terraform: no carga archivos `.tf` ni utiliza su estado.
 
-## Despliegue activo: 20 de octubre de 2026
-
-Los 18 recursos del laboratorio y los siete recursos de su backend OpenTofu fueron eliminados. El laboratorio se recreó desde cero con este proyecto: stack `lab`, cuenta `222234418877`, región `us-east-2`. No fue necesaria una importación. Los respaldos privados del estado anterior están en `terraform/state-backups/rebuild-2026-10-20/`.
-
-| Servidor | ID | IP pública | IP privada |
-| --- | --- | --- | --- |
-| Cliente | `i-04469c31d367c0a3b` | `3.138.121.97` | `10.42.1.10` |
-| Backend | `i-068cdcc3819bb81f6` | `3.14.245.164` | `10.42.1.20` |
-
-AMI utilizada: `ami-0d31a22b09ceec4db`. La IP administrativa configurada para SSH es `181.188.164.3/32`, verificada desde esta conexión. Las IP públicas pueden cambiar: consultar siempre las salidas vigentes. Los servidores son nuevos; la instalación y el despliegue de la aplicación siguen siendo manuales.
+## Despliegue 
+Los IDs y las IP públicas no se documentan porque cambian; consúltalos con pulumi stack output servers.
 
 Verificación realizada: `pulumi preview --expect-no-changes` sin cambios pendientes y conexión SSH correcta a ambos EC2. Se guardó un respaldo del nuevo estado en `.pulumi/rebuild-2026-10-20.json`.
 
-## Estado compartido en S3
+## Estado
 
-El estado activo del laboratorio está en `s3://globomatics-pulumi-state-222234418877-us-east-2/globomatics?region=us-east-2`. Se migró desde el backend local sin recrear recursos. El bucket es privado, cifrado, versionado y protegido contra eliminación; Pulumi administra los bloqueos por stack.
+El estado se guarda en file://~ (carpeta .pulumi del usuario). Haz copias con pulumi stack export y respalda esa carpeta: sin el estado, Pulumi no puede administrar los recursos creados.
 
 El proyecto separado [`bootstrap/`](bootstrap/README.md), stack `shared`, administra el bucket y guarda su estado en el mismo backend. Consulta su guía para permisos, incorporación de compañeros y recuperación. La contraseña de secretos permanece fuera de S3 y Git.
 
@@ -25,7 +17,7 @@ El proyecto separado [`bootstrap/`](bootstrap/README.md), stack `shared`, admini
 
 | Elemento | Configuración |
 | --- | --- |
-| Cuenta y región | Solo `222234418877`; `us-east-2` por defecto |
+| Cuenta y región | Solo la cuenta indicada en src/config.ts (allowedAccountIds) ; us-east-2 por defecto |
 | Resource Group | `rg-globomatics-lab`, filtro `Project=globomatics` |
 | VPC | `10.42.0.0/16`, DNS y hostnames habilitados |
 | Subred | `10.42.1.0/24`, primera AZ disponible; IP pública solicitada por cada EC2 |
@@ -56,14 +48,23 @@ El bucket y la política de acceso de `terraform/bootstrap/` se retiraron al com
 
 Requiere Node.js >=22, npm, CLI de Pulumi y una identidad AWS autorizada. Desde `asistencia/`:
 
-```bash
-cd infra/pulumi
+cd infra\pulumi
 npm ci
 npm run check
 npm test
 
+aws configure
+pulumi login file://~
+$env:PULUMI_CONFIG_PASSPHRASE = '<tu frase>'
+pulumi stack init lab
+pulumi config set sshSourceCidr "TU.IP.PUBLICA/32"
+pulumi preview
+pulumi up
+pulumi stack output servers
+pulumi stack output ssh_commands
+
 # Autenticación mediante AWS CLI; abre Brave para autorizar la sesión.
-BROWSER=/usr/bin/brave-browser aws login --profile default --region us-east-2
+aws configure
 
 # El adaptador usa las credenciales temporales sin imprimirlas ni guardarlas en código.
 python3 scripts/aws-session.py pulumi stack select lab

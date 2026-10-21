@@ -20,7 +20,7 @@ Los comandos requieren Bash. Ejecuta los apartados en orden y detente si aparece
 |---|---|---|
 | Nombre | `ec2-cliente-globomatics-lab` | `ec2-backend-globomatics-lab` |
 | ID de instancia | `i-0b8c3e57a2831a597` | `i-074e5a49871b500f9` |
-| IP pública observada | `18.217.126.171` | `18.117.100.115` |
+| IP pública observada | `<IP_PUBLICA_CLIENTE>` | `<IP_PUBLICA_BACKEND>` |
 | IP privada | `10.42.1.10` | `10.42.1.20` |
 | Servicio de aplicación | Nginx, TCP 80/443 | Node.js/Express, TCP 8090 |
 | Base de datos | No se instala | MySQL, `127.0.0.1:3306` |
@@ -32,7 +32,7 @@ La IaC con Pulumi se encuentra en [`infra/pulumi`](../infra/pulumi/README.md). C
 Confirma las direcciones antes de empezar, desde **LOCAL**:
 
 ```bash
-cd '/home/borysquiroga/Documentos/docs/Diplomado/Módulo 2/asistencia'
+cd <ruta-del-proyecto>
 (cd infra/pulumi && python3 scripts/aws-session.py pulumi stack output servers)
 (cd infra/pulumi && python3 scripts/aws-session.py pulumi stack output ssh_commands)
 ```
@@ -136,7 +136,7 @@ No repitas la creación sobre un archivo existente. La swap ayuda ante picos; si
 **LOCAL, desde la raíz del proyecto**, crea un directorio temporal y dos paquetes. No se incluyen `.git`, `node_modules`, estados de OpenTofu, claves ni `.env.backend` con credenciales.
 
 ```bash
-cd '/home/borysquiroga/Documentos/docs/Diplomado/Módulo 2/asistencia'
+cd <ruta-del-proyecto>
 DEPLOY_DIR=$(mktemp -d /tmp/globomatics-deploy.XXXXXX)
 
 tar -czf "$DEPLOY_DIR/backend.tar.gz" \
@@ -156,7 +156,7 @@ sha256sum client.tar.gz > client.sha256
 scp -i "$SSH_KEY" backend.tar.gz backend.sha256 "ec2-user@$BACKEND_PUBLIC:~/"
 scp -i "$SSH_KEY" client.tar.gz client.sha256 "ec2-user@$CLIENT_PUBLIC:~/"
 
-cd '/home/borysquiroga/Documentos/docs/Diplomado/Módulo 2/asistencia'
+cd <ruta-del-proyecto>
 ```
 
 En **BACKEND**:

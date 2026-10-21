@@ -1,0 +1,8 @@
+config:
+  aws:region: us-east-2
+  asistencia-infra:sshSourceCidr: 181.114.108.136/32
+  asistencia-infra:sshPublicKeyPath: ~/globomatics-ec2.pub
+  # Opcionales al importar: usar los valores actuales de AWS para evitar reemplazos.
+  # asistencia-infra:availabilityZone: us-east-2a
+  # asistencia-infra:clientAmiId: ami-REEMPLAZAR
+  # asistencia-infra:backendAmiId: ami-REEMPLAZAR

@@ -3,8 +3,9 @@ import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
 import multer from 'multer';
 import {randomBytes} from 'node:crypto';
-export function createApp(service,{allowedOrigins=['http://localhost:8080','http://127.0.0.1:8080']}={}) {
+export function createApp(service,{allowedOrigins=['http://localhost:8080','http://127.0.0.1:8080'],trustedProxies=[]}={}) {
  const app=express(),sessions=new Map();
+ app.set('trust proxy',trustedProxies);
  app.disable('x-powered-by');app.use(helmet());app.use(express.json({limit:'100kb'}));
  // El backend solo sirve la API. CORS admite los clientes configurados.
  app.use('/api',(req,res,next)=>{

@@ -222,19 +222,21 @@ flowchart LR
 
 ```mermaid
 flowchart LR
- subgraph Cliente[Equipo cliente · presentación]
- FS[frontend/server.js · puerto 8080] --> B[Navegador · cliente ligero]
- CFG[API_BASE_URL] --> B
+ B[Navegador] <-->|HTML, CSS, JS y /api| N
+ subgraph Cliente[Servidor cliente]
+ N[Nginx · archivos estáticos y proxy]
+ CFG[asistencia.conf · proxy_pass] --> N
  end
- subgraph Backend[Equipo backend · negocio y datos]
- API[Express · IP backend:3000] --> S[Servicios y reglas]
+ subgraph Backend[Servidor backend]
+ API[Express · API privada:8090] --> S[Servicios y reglas]
  S --> R[Repositorio]
- R --> MYSQL[(MySQL · 127.0.0.1:3306)]
+ R --> MYSQL[(MySQL · servicio interno:3306)]
+ MYSQL --> V[Directorio de datos local]
  end
- B <-->|HTTP / JSON · Bearer · CORS| API
+ N <-->|Red privada · /api · Bearer| API
 ```
 
-Arranque independiente: `npm start` en el cliente; servicio MySQL y `npm run start:backend` en el backend. La IP del backend se configura en `.env.frontend`; el origen del cliente se autoriza en `.env.backend`. El navegador nunca se conecta directamente a MySQL.
+Instalación manual con Nginx como servicio en el cliente, y Node.js/systemd más MySQL como servicios en el backend. MySQL escucha solo en `127.0.0.1`. La URL pública del cliente se autoriza con `FRONTEND_ORIGINS`; `TRUSTED_PROXIES` identifica el Nginx de confianza. El navegador usa `/api` en su mismo origen y nunca accede directamente a MySQL. Ver `README.md` para despliegue nativo y HTTPS.
 
 ## Trazabilidad
 

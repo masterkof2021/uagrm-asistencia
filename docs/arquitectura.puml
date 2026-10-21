@@ -9,16 +9,16 @@ skinparam packageStyle rectangle
 
 actor "Estudiante / Administrador" as User
 
-node "Equipo cliente" as Client {
+node "Servidor cliente" as Client {
   package "1. Presentación - Cliente ligero" #EAF2FF {
-    component "Servidor de archivos Node.js\nfrontend/server.js\nPuerto 8080" as Front
+    component "Nginx\nArchivos estáticos y proxy /api\nPuerto 80" as Front
     component "Navegador\npublic/index.html\npublic/styles.css\npublic/app.js" as Browser
-    artifact ".env.frontend\nAPI_BASE_URL" as FrontConfig
+    artifact "asistencia.conf\nproxy_pass" as FrontConfig
   }
 }
 
-node "Equipo backend" as Backend {
-  frame "Proceso Node.js - API, puerto 3000" {
+node "Servidor backend" as Backend {
+  frame "Proceso Node.js - API, puerto 8090" {
     package "1. Presentación - Adaptador HTTP" #EAF2FF {
       component "Express\nsrc/presentation/app.js\nRutas, sesión Bearer, CORS\ny traducción de errores a HTTP" as API
     }
@@ -46,7 +46,7 @@ node "Equipo backend" as Backend {
 User --> Browser
 Browser --> Front : GET archivos y /config.js
 FrontConfig --> Front : Configuración pública
-Browser --> API : HTTP /api a IP_BACKEND:3000\nJSON, multipart y Excel\nAuthorization: Bearer TOKEN
+Front --> API : Proxy /api a IP_BACKEND:8090\nJSON, multipart y Excel\nAuthorization: Bearer TOKEN
 API --> ServicePort : Invoca casos de uso
 Service ..|> ServicePort : Implementa
 Service --> Rules
@@ -54,7 +54,7 @@ Service --> Helpers : Funciones inyectadas
 Service --> RepositoryPort : Persistencia por contrato
 Repository ..|> RepositoryPort : Implementa
 Repository --> Connection
-Connection --> DB : SQL / TCP\nDB_HOST por defecto 127.0.0.1
+Connection --> DB : SQL / TCP\n127.0.0.1:3306
 BackendConfig --> Bootstrap
 Bootstrap ..> API : Crea aplicación HTTP
 Bootstrap ..> Service : Inyecta dependencias
@@ -62,10 +62,10 @@ Bootstrap ..> Repository : Selecciona adaptador
 Bootstrap ..> Helpers : Selecciona funciones
 
 note bottom of Front
-  npm start / npm run dev
-  Solo sirve archivos y configuración pública.
+  Servicio Nginx
+  Sirve archivos estáticos y reenvía /api.
   Puede iniciarse sin backend ni MySQL.
-  El navegador se conecta directamente a la API.
+  El navegador usa /api en su mismo origen.
 end note
 
 note bottom of Service
@@ -77,14 +77,14 @@ note bottom of Service
 end note
 
 note bottom of DB
-  MySQL se inicia como servicio independiente.
+  MySQL es un servicio interno del servidor backend.
   npm run db:init crea esquema y administrador
   sin borrar datos existentes.
   La interfaz no accede directamente a MySQL.
 end note
 
 note top of Bootstrap
-  npm run start:backend / npm run dev:backend
+  Servicio asistencia (Node.js) y servicio MySQL
   FRONTEND_ORIGINS autoriza el origen exacto del cliente.
   Las sesiones y borradores se conservan en memoria de la API.
 end note
@@ -93,7 +93,7 @@ legend bottom left
   Azul: presentación; verde: negocio; amarillo: datos.
   Flecha continua: uso o comunicación.
   Flecha discontinua: composición o implementación de contrato.
-  Tres capas lógicas; cliente, API y MySQL se levantan por separado.
+  Tres capas lógicas en dos servidores; API y MySQL en backend.
   Puertos indicados: valores predeterminados configurables.
 endlegend
 @enduml

@@ -1,0 +1,10 @@
+name: asistencia-state-backend
+runtime:
+  name: nodejs
+  options:
+    typescript: true
+description: Bucket protegido para los estados compartidos de Pulumi de asistencia.
+config:
+  aws:region: us-east-2
+backend:
+  url: s3://globomatics-pulumi-state-222234418877-us-east-2/globomatics?region=us-east-2

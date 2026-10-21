@@ -28,3 +28,12 @@ test('Cliente borra token ante sesión vencida y admite multipart sin forzar Con
  await new Promise(resolve=>setImmediate(resolve));assert.equal(storage.has('attendanceToken'),false);
  await assert.rejects(vm.runInContext("request('/import/students',{method:'POST',body:new FormData()})",context),/Sesión vencida/);assert.equal(requests.at(-1).options.headers.has('Content-Type'),false);
 });
+
+test('Configuración estática permite usar la API del mismo origen sin Node en el cliente',async()=>{
+ const context=vm.createContext({window:{}});
+ vm.runInContext(await readFile(new URL('../public/config.js',import.meta.url),'utf8'),context);
+ assert.equal(context.window.APP_CONFIG.apiBaseUrl,'/api');
+ assert.equal(Object.isFrozen(context.window.APP_CONFIG),true);
+ const html=await readFile(new URL('../public/index.html',import.meta.url),'utf8');
+ assert.ok(html.indexOf('src="/config.js"')<html.indexOf('src="/app.js"'));
+});

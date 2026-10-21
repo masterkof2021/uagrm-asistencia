@@ -6,7 +6,7 @@ La aplicación conserva el alcance de `Requerimientos_Control_Asistencia.pdf`: u
 
 | Capa | Responsabilidad | Dependencias permitidas |
 |---|---|---|
-| Presentación (`frontend/`, `public/`, `src/presentation/`) | Formularios, tablas, filtros visuales, solicitudes, configuración de API, tokens, sesión y traducción de errores a HTTP | Contrato del servicio; Express solo en el adaptador HTTP |
+| Presentación (`deploy/client/`, `public/`, `src/presentation/`) | Formularios, tablas, filtros visuales, solicitudes, configuración de API, tokens, sesión y traducción de errores a HTTP | Contrato del servicio; Express solo en el adaptador HTTP |
 | Negocio (`src/services/`) | Acceso, roles, estados, marca, corrección, auditoría requerida y activación | Contrato del repositorio; reloj y funciones de contraseña/Excel inyectadas |
 | Datos (`src/repositories/`, `database/`) | Consultas, persistencia, bloqueos, commit/rollback, claves y restricciones | MySQL; no depende de presentación o servicios |
 
@@ -61,10 +61,12 @@ Las pruebas del repositorio en memoria demuestran reglas y límites, no sustituy
 
 ## Cliente y backend independientes
 
-`frontend/server.js` solo utiliza módulos incluidos en Node.js. Sirve `public/` y `/config.js`, que expone `API_BASE_URL` como URL pública. No importa servicios, repositorios ni dependencias de MySQL. `npm start` arranca solo este servidor en el puerto 8080.
+El despliegue consta de dos servidores. El servidor cliente ejecuta únicamente Nginx (`deploy/client/`), sirve `public/` y reenvía `/api` al servidor backend. `public/config.js` define la URL relativa `/api`; no requiere un proceso Node.js ni variables de entorno en el navegador. La directiva `proxy_pass` en `deploy/client/asistencia.conf` indica la dirección privada del backend.
 
-`src/server.js` arranca la API en el puerto 3000 (`npm run start:backend`). Negocio y datos residen en este equipo; MySQL se inicia aparte como servicio. El backend no sirve los archivos del cliente. La capa lógica de presentación incluye tanto la interfaz del navegador como el adaptador HTTP del backend: separación de capas y separación de procesos son conceptos diferentes.
+El servidor backend ejecuta la API Node.js/Express, las capas de negocio y datos y el gestor MySQL. API y MySQL son servicios separados dentro del mismo servidor. MySQL se instala como servicio local, escuchando en `127.0.0.1`, con almacenamiento persistente en su directorio de datos y un usuario exclusivo de la base. El esquema se inicializa manualmente con `npm run db:init` sin borrar datos. La API se ejecuta con Node.js, supervisada por la unidad systemd `deploy/backend/asistencia.service`. No se trasladan reglas de negocio al cliente.
 
-El navegador envía las solicitudes directamente a `http(s)://IP_BACKEND:PUERTO/api`. El backend permite mediante CORS solo los orígenes configurados en `FRONTEND_ORIGINS`, incluidas las solicitudes previas OPTIONS. La sesión usa `Authorization: Bearer TOKEN`; no depende de cookies entre IP distintas. El token se guarda en `sessionStorage`, se elimina al cerrar sesión y nunca se incorpora a enlaces de descarga. Plantillas y exportaciones se descargan mediante `fetch` autenticado y un archivo Blob temporal.
+El navegador envía solicitudes al mismo origen del cliente. Nginx conserva el prefijo `/api`, el token Bearer y las cargas/descargas; sobrescribe `X-Forwarded-For` con la IP observada. La API permite solo los orígenes configurados en `FRONTEND_ORIGINS` y solo confía en los proxies de `TRUSTED_PROXIES` para calcular la IP usada por el límite de acceso. La red/firewall debe restringir la API al servidor cliente.
 
-Las pruebas de cliente y HTTP comprueban la URL remota, token, cargas multipart, descargas, expiración y arranque de presentación sin backend. La base de datos sigue accesible únicamente para el backend.
+La sesión usa `Authorization: Bearer TOKEN`, se guarda en `sessionStorage` y nunca se incorpora a enlaces de descarga. Plantillas y exportaciones utilizan `fetch` autenticado y un Blob temporal. Sesiones y borradores permanecen en memoria de una única instancia de API; reiniciar exige acceder y preparar los archivos nuevamente.
+
+Los pasos de instalación manual, permisos, variables y configuración HTTPS se documentan en `README.md`. Nginx, la API y MySQL se administran como servicios del sistema en sus servidores respectivos. MySQL sigue siendo un proceso separado de Node.js.

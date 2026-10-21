@@ -1,0 +1,47 @@
+# Dependencias, plugins, contraseña, checkpoints y respaldos locales de Pulumi
+node_modules/
+.pulumi/
+
+# Configuración personal de stacks: recuperar con `pulumi config refresh`
+# Pulumi.yaml (proyecto y backend S3) y las plantillas sí se versionan.
+Pulumi.*.yaml
+Pulumi.*.yml
+!Pulumi.*.yaml.example
+!Pulumi.*.yml.example
+Pulumi.*.yaml.bak*
+Pulumi.*.yml.bak*
+
+# Exportaciones y planes fuera de .pulumi/: pueden contener secretos
+stack.json
+stack-export*.json
+pulumi-state*.json
+*.stack.json
+*.checkpoint.json
+*-plan.json
+*.plan.json
+*.plan
+import.json
+state-backups/
+
+# Restos de estados y planes de Terraform/OpenTofu
+.terraform/
+*.tfstate*
+*.tfplan
+
+# Credenciales y claves locales
+.aws/
+.env
+.env.*
+!.env.example
+!.env.*.example
+*.pem
+*.key
+*.key.pub
+*.ppk
+globomatics-ec2
+globomatics-ec2.pub
+
+# Cachés de Python y TypeScript
+__pycache__/
+*.py[cod]
+*.tsbuildinfo

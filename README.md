@@ -1,60 +1,107 @@
 # UAGRM · Control de asistencia
 
-Aplicación en tres capas con **cliente ligero y backend que se levantan por separado**. El navegador consume la API por la IP/URL configurada. El equipo backend ejecuta Node.js/Express y MySQL; el cliente no necesita MySQL ni ejecuta reglas de negocio.
+Aplicación en tres capas con **cliente ligero y backend que se levantan por separado**. El navegador consume `/api` a través de Nginx en el servidor cliente. El equipo backend ejecuta Node.js/Express y MySQL; el cliente no necesita MySQL ni ejecuta reglas de negocio.
 
-## Levantar solo el cliente
+## Infraestructura con Pulumi
 
-Necesita Node.js 22 o superior. No requiere instalar las dependencias del backend para servir la interfaz.
+La infraestructura de esta aplicación se define con **Pulumi y TypeScript** en [`infra/pulumi/`](infra/pulumi/README.md). Reproduce los 18 recursos del laboratorio de la carpeta hermana `terraform`: red, seguridad, clave pública y dos EC2 con discos cifrados. Su README contiene la configuración, validación y correspondencia para importar los recursos existentes.
 
-```bash
-cp .env.frontend.example .env.frontend
-npm start
+El 20 de octubre de 2026 se eliminaron los 18 recursos del laboratorio OpenTofu y los siete de su backend S3, y se recreó el laboratorio con Pulumi. La carpeta `../terraform/` queda como referencia histórica; la administración activa corresponde al stack `lab` de `infra/pulumi`. El estado activo se comparte en el bucket S3 `globomatics-pulumi-state-222234418877-us-east-2`, con versionado y bloqueo por stack. El proyecto [`infra/pulumi/bootstrap`](infra/pulumi/bootstrap/README.md) administra el bucket. La contraseña de cifrado permanece fuera de Git y S3, y debe compartirse por un canal seguro entre los operadores autorizados.
+
+Las configuraciones de Nginx y systemd permanecen en `deploy/` como parte de la aplicación. La [guía de despliegue manual en AWS](docs/despliegue-manual-aws.md) explica cómo instalar y actualizar los servicios sobre los servidores aprovisionados.
+
+## Despliegue manual en dos servidores
+
+- **Servidor cliente:** instala Nginx y sirve `public/`. Reenvía `/api` a la IP privada del backend. No requiere Node.js, npm ni MySQL.
+- **Servidor backend:** instala Node.js 24, npm y MySQL 8.0 o superior. Ejecuta la API (negocio y repositorios) y MySQL como servicios separados del mismo equipo.
+
+Los ejemplos usan cliente `192.168.1.20` y backend `192.168.1.30:8090`. Sustituye estas direcciones por las reales. Los comandos de instalación de paquetes y el nombre del servicio MySQL dependen del sistema operativo. Los archivos de servicio incluidos están preparados para Linux con systemd. La instalación se realiza manualmente; el proyecto no instala ni modifica servicios del sistema por sí solo.
+
+### 1. Backend: MySQL y configuración
+
+Instala e inicia MySQL en el servidor backend. Configura `bind-address=127.0.0.1` en su sección `[mysqld]` y reinicia su servicio: la base solo debe aceptar conexiones locales. Si MySQL habilita otros puertos, como el de X Protocol, restringe también su escucha al equipo local o deshabilítalos si no se utilizan.
+
+En una sesión administrativa de MySQL, crea la base y un usuario exclusivo de la aplicación. Elige una contraseña propia y utiliza ese mismo valor en `.env.backend`:
+
+```sql
+CREATE DATABASE IF NOT EXISTS uagrm_asistencia
+  CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+CREATE USER 'asistencia'@'127.0.0.1' IDENTIFIED BY 'REEMPLAZAR_POR_CLAVE_PROPIA';
+GRANT ALL PRIVILEGES ON uagrm_asistencia.* TO 'asistencia'@'127.0.0.1';
 ```
 
-En `.env.frontend`, configura la dirección del equipo backend:
+La cuenta solo tiene permisos sobre esa base. Si ya existe, administra su contraseña con `ALTER USER`; no elimines ni recrees la base existente.
 
-```dotenv
-FRONTEND_HOST=0.0.0.0
-FRONTEND_PORT=8080
-API_BASE_URL=http://192.168.1.30:3000
-```
-
-La IP es un ejemplo: reemplázala por la real. `API_BASE_URL` contiene protocolo, IP y puerto, sin `/api`; el cliente agrega ese prefijo. Abre `http://localhost:8080` en el equipo cliente. Para otros equipos, usa `http://IP_DEL_CLIENTE:8080`. Reinicia el servidor cliente después de cambiar su configuración.
-
-`npm start` y `npm run dev` levantan únicamente presentación. También están disponibles `npm run start:frontend` y `npm run dev:frontend`. Sin `.env.frontend`, se usan puerto 8080 y backend `http://127.0.0.1:3000`, útiles para probar dos procesos en el mismo equipo. La pantalla de acceso puede abrirse sin backend; las operaciones requieren conexión y muestran un error si no está disponible.
-
-## Levantar negocio y datos en el equipo backend
-
-Necesita Node.js 22 o superior y MySQL Server 8.0 o superior en ejecución. Copia la configuración y sustituye las credenciales antes de inicializar:
+Coloca en `/opt/asistencia/` los archivos `package.json`, `package-lock.json` y los directorios `src/`, `scripts/`, `database/` y `deploy/backend/`. Copia también `.env.backend.example` si vas a usarlo como plantilla. Para otra ruta, ajusta la unidad systemd. Dentro de esa carpeta:
 
 ```bash
 cp .env.backend.example .env.backend
-npm install
+# Edita las IPs, el usuario y las contraseñas antes de continuar.
+npm ci --omit=dev
 npm run db:init
-npm run start:backend
+npm start
 ```
 
-Ejemplo de configuración para cliente `192.168.1.20` y backend `192.168.1.30`:
+`npm start` y `npm run start:backend` ejecutan la API en primer plano. Detén esa ejecución con Ctrl+C antes de iniciarla como servicio. `npm run dev` y `npm run dev:backend` activan la recarga para desarrollo.
 
-```dotenv
-BACKEND_HOST=0.0.0.0
-PORT=3000
-FRONTEND_ORIGINS=http://192.168.1.20:8080,http://localhost:8080
-DB_HOST=127.0.0.1
-DB_PORT=3306
-DB_USER=root
-DB_PASSWORD=tu_clave_mysql
-DB_NAME=uagrm_asistencia
-ADMIN_USER=admin
-ADMIN_PASSWORD=elige_una_clave_propia_de_al_menos_12_caracteres
-INSTITUTION_TIMEZONE=America/La_Paz
+Variables de `.env.backend`:
+
+| Variable | Configuración |
+|---|---|
+| `BACKEND_HOST`, `PORT` | IP privada local del backend y puerto de API; ejemplo `192.168.1.30`, `8090` |
+| `FRONTEND_ORIGINS` | Origen exacto del cliente; ejemplo `http://192.168.1.20` |
+| `TRUSTED_PROXIES` | IP del Nginx vista por la API; ejemplo `192.168.1.20` |
+| `DB_HOST`, `DB_PORT` | MySQL local: `127.0.0.1`, `3306` |
+| `DB_USER`, `DB_PASSWORD`, `DB_NAME` | Usuario dedicado, su contraseña y base |
+| `ADMIN_USER`, `ADMIN_PASSWORD` | Cuenta inicial de administración; contraseña de al menos 12 caracteres |
+| `INSTITUTION_TIMEZONE` | `America/La_Paz` |
+
+`npm run db:init` crea las tablas y el administrador sin borrar datos. Si el administrador ya existe, conserva su contraseña; cambiar la variable no modifica esa cuenta. La inicialización se ejecuta manualmente, con MySQL disponible, antes del primer arranque. MySQL guarda los datos en su directorio de almacenamiento habitual; configura copias de seguridad de la base.
+
+### 2. Backend como servicio systemd
+
+Se incluye `deploy/backend/asistencia.service`. Crea un usuario de sistema `asistencia` sin acceso interactivo; en Debian/Ubuntu puedes usar `sudo useradd --system --user-group --home-dir /opt/asistencia --no-create-home --shell /usr/sbin/nologin asistencia` si no existe. Permite a ese usuario leer la aplicación y sus dependencias. Protege `.env.backend`, por ejemplo con propietario `root:asistencia` y permisos `640`.
+
+Ajusta `User`, `Group`, `WorkingDirectory` y las rutas de `ExecStart` en el archivo según tu instalación. `ExecStart` requiere la ruta absoluta de Node.js 24: consulta `command -v node`. Una instalación dentro de un directorio personal no será accesible con `ProtectHome=true`; utiliza una instalación del sistema accesible al usuario del servicio. Ajusta `After` al nombre real de tu servicio MySQL (`mysql.service` o `mysqld.service`). Inicia MySQL antes de iniciar la API; la unidad no instala ni inicializa la base.
+
+```bash
+sudo cp deploy/backend/asistencia.service /etc/systemd/system/asistencia.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now asistencia
+sudo systemctl status asistencia
 ```
 
-`FRONTEND_ORIGINS` enumera los orígenes exactos desde los que se abre el cliente, separados por comas: protocolo, IP/nombre y puerto. Si el usuario abre la interfaz en `http://192.168.1.20:8080`, ese es el origen permitido, aunque su navegador esté en un tercer equipo. El backend debe ser accesible desde el navegador en el puerto configurado. MySQL puede permanecer en `127.0.0.1` del backend: el cliente nunca se conecta a su puerto.
+Para reiniciar después de cambios usa `sudo systemctl restart asistencia`. Para consultar registros usa `sudo journalctl -u asistencia -n 100 --no-pager`. Activa también el arranque automático de MySQL usando su nombre de servicio. Las sesiones y borradores están en memoria de una sola instancia de API y se pierden al reiniciarla; los registros de asistencia permanecen en MySQL.
 
-El backend solo sirve `/api`; no sirve HTML/CSS/JavaScript. Para desarrollo usa `npm run dev:backend`. MySQL se inicia como servicio aparte y no se lanza desde el cliente. `.env.backend` contiene secretos y está excluido de Git. `.env.frontend` contiene solo configuración pública. En un despliegue con HTTPS, configura también la API con HTTPS.
+### 3. Cliente: Nginx y archivos estáticos
 
-`npm run db:init` crea la base y tablas sin borrar información. El administrador existente conserva su contraseña: cambiar la variable después de inicializar no modifica esa cuenta.
+Instala Nginx en el servidor cliente. Desde la copia del proyecto en ese servidor:
+
+```bash
+sudo install -d -m 755 /var/www/asistencia
+sudo install -m 644 public/index.html public/app.js public/styles.css public/config.js /var/www/asistencia/
+sudo cp deploy/client/asistencia.conf /etc/nginx/conf.d/asistencia.conf
+```
+
+Edita `/etc/nginx/conf.d/asistencia.conf`: ajusta `listen` (80 en el ejemplo), `server_name`, `root` y `proxy_pass` con la dirección privada real del backend, **sin `/api` ni barra final**. La regla conserva el prefijo `/api` al reenviar solicitudes. La configuración debe estar incluida desde el bloque `http` principal de Nginx y no competir con otro servidor predeterminado en ese puerto; adapta la ubicación del archivo a tu distribución.
+
+```bash
+sudo nginx -t
+sudo systemctl enable --now nginx
+sudo systemctl reload nginx
+```
+
+Abre `http://192.168.1.20`. `public/config.js` define `/api`; la dirección del backend se configura directamente en `proxy_pass`. No hay un servidor Node para el cliente ni pasos de compilación. Nginx no utiliza `.env.frontend`; cualquier archivo local antiguo de ese nombre queda sin efecto. Para actualizar la interfaz, vuelve a copiar los cuatro archivos; si cambias la configuración, valida y recarga Nginx.
+
+### Red y HTTPS
+
+Autoriza el puerto de la API únicamente desde el servidor cliente mediante el firewall/red privada. Mantén MySQL escuchando solo en la interfaz local del backend. El navegador se conecta al cliente y nunca directamente a MySQL.
+
+La configuración incluida sirve HTTP para pruebas/red privada. Antes de publicar, configura HTTPS en Nginx o en el balanceador de entrada, dominio y certificado; cambia `FRONTEND_ORIGINS` al origen real, por ejemplo `https://asistencia.ejemplo.com`. El navegador sigue usando `/api` en el mismo origen. Si Nginx → API cruza una red pública, configura TLS verificado o una VPN.
+
+Si hay un balanceador delante de Nginx, configura `set_real_ip_from`/`real_ip_header` únicamente para sus direcciones de confianza. Nginx sobrescribe `X-Forwarded-For` con la IP observada; Express solo confía en las direcciones de `TRUSTED_PROXIES` para limitar intentos por IP real.
+
+Nginx conserva las cabeceras de seguridad, permite peticiones de hasta 4 MB para los archivos Excel de hasta 3 MB más el formulario y limita a tres segundos la conexión al backend cuando no está disponible. No copies credenciales ni archivos del backend al directorio público del cliente.
 
 ## Primera utilización y Excel
 
@@ -88,8 +135,9 @@ Fechas `DD/MM/AAAA` o `AAAA-MM-DD`; horas `HH:MM` o celdas de hora de Excel. La 
 ## Arquitectura
 
 ```text
-frontend/server.js         Servidor cliente: archivos y configuración pública
-public/                    Presentación en navegador; conexión a API remota
+deploy/client/             Nginx: archivos estáticos y proxy a /api
+deploy/backend/            Unidad systemd para la API; MySQL se instala localmente
+public/                    Presentación y config.js estático; conexión por /api
 src/presentation/app.js    Adaptador HTTP del backend: CORS, token y respuestas
 src/services/              Negocio: casos de uso, permisos y reglas
 src/repositories/          Datos: consultas MySQL y transacciones
@@ -109,6 +157,6 @@ npm test
 npm run check
 ```
 
-Las pruebas HTTP abren puertos temporales locales. Se verifican reglas con repositorio en memoria, API con servicio sustituto, arranque independiente del cliente, CORS, tokens y descargas. La prueba con MySQL real y dos equipos se describe en `docs/verificacion.md`.
+Las pruebas HTTP abren puertos temporales locales. Se verifican reglas con repositorio en memoria, API con servicio sustituto, configuración estática del cliente, CORS, proxy de confianza, tokens y descargas. La prueba con MySQL real y dos equipos se describe en `docs/verificacion.md`.
 
-Si falla la conexión, comprueba IP/puerto en `.env.frontend`, disponibilidad del backend y que el origen del cliente esté en `FRONTEND_ORIGINS`. Para errores de MySQL, revisa el servicio y `.env.backend`. Usa `npm start` para el cliente y `npm run start:backend` para la API; Live Server no configura `/config.js` ni ejecuta el backend.
+Si falla la conexión, comprueba `proxy_pass` en Nginx, el firewall entre servidores, disponibilidad de la API y que el origen del cliente esté en `FRONTEND_ORIGINS`. Consulta `journalctl -u asistencia`, los registros de MySQL y los archivos de acceso/error de Nginx según tu instalación. Comprueba la configuración con `nginx -t`.

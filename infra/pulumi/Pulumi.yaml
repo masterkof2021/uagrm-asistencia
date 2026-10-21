@@ -7,4 +7,4 @@ description: Red y dos servidores EC2 equivalentes al laboratorio Globomatics de
 config:
   aws:region: us-east-2
 backend:
-  url: s3://globomatics-pulumi-state-222234418877-us-east-2/globomatics?region=us-east-2
+  url: file://~

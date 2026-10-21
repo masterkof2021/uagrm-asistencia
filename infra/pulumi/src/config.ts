@@ -23,7 +23,7 @@ if (!/^(ssh-ed25519|ssh-rsa|ecdsa-sha2-\S+) [A-Za-z0-9+/]+={0,2}(?:\s|$)/.test(p
 export const tags = (name: string) => ({ Name: name, Project: project, ManagedBy: "Pulumi" });
 export const provider = new aws.Provider("globomatics", {
   region: (new pulumi.Config("aws").get("region") ?? "us-east-2") as aws.Region,
-  allowedAccountIds: ["222234418877"],
+  allowedAccountIds: ["487450071663"],
   defaultTags: { tags: { Project: project, ManagedBy: "Pulumi" } },
 });
 export const options = { provider };

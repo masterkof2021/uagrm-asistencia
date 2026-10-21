@@ -37,7 +37,7 @@ test('equivalencia del laboratorio: red, seguridad, discos y salidas', async () 
   const ofType = type => awsResources.filter(resource => resource.type === type).map(resource => resource.inputs);
   assert.equal(ofType('aws:resourcegroups/group:Group').length, 1);
   const [provider] = resources.filter(resource => resource.type === 'pulumi:providers:aws');
-  assert.deepEqual(JSON.parse(provider.inputs.allowedAccountIds), ['222234418877']);
+  assert.deepEqual(JSON.parse(provider.inputs.allowedAccountIds), ['487450071663']);
   assert.equal(provider.inputs.region, 'us-east-2');
   const [vpc] = ofType('aws:ec2/vpc:Vpc');
   assert.equal(vpc.cidrBlock, '10.42.0.0/16');

@@ -1,0 +1,312 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  Laboratorio de asistencia equivalente a Pulumi: red propia y dos EC2,
+  API privada entre grupos de seguridad y acceso administrativo limitado.
+Metadata:
+  AWSToolsMetrics:
+    AWSAgentToolkit: aws-cloudformation@3
+  com.aws.cloudformation.Context:
+    arch: Nginx en cliente; Node.js y MySQL locales al backend; instalacion manual.
+    must:
+      - No importar ni modificar los recursos administrados por Pulumi.
+      - MySQL sin reglas de entrada; API solo desde el cliente.
+      - Respaldo de MySQL antes de eliminar o reemplazar EC2.
+    ref: [../README.md]
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label: {default: Acceso y seguridad}
+        Parameters: [SshIngressCidr, WebIngressCidr, SshPublicKey]
+      - Label: {default: Servidores}
+        Parameters: [InstanceType, AmazonLinuxAmi]
+Parameters:
+  SshIngressCidr:
+    Type: String
+    Description: IPv4 publica de tu PC con /32. No se admite acceso SSH global.
+    AllowedPattern: '^(?:(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])\.){3}(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])/32$'
+    ConstraintDescription: Introducir una IPv4 valida con mascara /32.
+  WebIngressCidr:
+    Type: String
+    Description: IPv4 publica autorizada para la demostracion web, con /32.
+    AllowedPattern: '^(?:(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])\.){3}(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])/32$'
+    ConstraintDescription: Introducir una IPv4 valida con mascara /32.
+  SshPublicKey:
+    Type: String
+    Description: Contenido de globomatics-ec2.pub; nunca pegar la clave privada.
+    AllowedPattern: '^(ssh-ed25519|ssh-rsa|ecdsa-sha2-\S+) [A-Za-z0-9+/]+={0,2}( .*)?$'
+  InstanceType:
+    Type: String
+    Default: t3.micro
+    AllowedValues: [t3.micro]
+    Description: Tipo de laboratorio limitado para evitar seleccion accidental costosa.
+  AmazonLinuxAmi:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-6.18-x86_64
+    Description: Misma familia Amazon Linux utilizada en Pulumi; revisar cambios de AMI.
+Resources:
+  ResourceGroup:
+    Type: AWS::ResourceGroups::Group
+    Properties:
+      Name: !Sub '${AWS::StackName}-recursos'
+      Description: Recursos exclusivos del laboratorio CloudFormation.
+      ResourceQuery:
+        Type: TAG_FILTERS_1_0
+        Query:
+          ResourceTypeFilters: ['AWS::AllSupported']
+          TagFilters:
+            - Key: Deployment
+              Values: [!Ref 'AWS::StackName']
+      Tags:
+        - {Key: Deployment, Value: !Ref 'AWS::StackName'}
+  Vpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.42.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - {Key: Name, Value: !Sub '${AWS::StackName}-vpc'}
+        - {Key: Deployment, Value: !Ref 'AWS::StackName'}
+  PublicSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: 10.42.1.0/24
+      AvailabilityZone: !Select [0, !GetAZs '']
+      MapPublicIpOnLaunch: false
+      Tags:
+        - {Key: Name, Value: !Sub '${AWS::StackName}-subred'}
+        - {Key: Deployment, Value: !Ref 'AWS::StackName'}
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - {Key: Deployment, Value: !Ref 'AWS::StackName'}
+  GatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref Vpc
+      InternetGatewayId: !Ref InternetGateway
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref Vpc
+      Tags:
+        - {Key: Deployment, Value: !Ref 'AWS::StackName'}
+  InternetRoute:
+    Type: AWS::EC2::Route
+    DependsOn: GatewayAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+  SubnetRouteAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet
+      RouteTableId: !Ref PublicRouteTable
+  ClientSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Web y SSH limitados a las IP administrativas del laboratorio.
+      VpcId: !Ref Vpc
+      SecurityGroupEgress:
+        - IpProtocol: '-1'
+          CidrIp: 127.0.0.1/32
+          Description: Regla inicial sin salida externa; las reglas reales son independientes.
+      Tags:
+        - {Key: Deployment, Value: !Ref 'AWS::StackName'}
+  BackendSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: API solo desde cliente; SSH administrativo; sin entrada MySQL.
+      VpcId: !Ref Vpc
+      SecurityGroupEgress:
+        - IpProtocol: '-1'
+          CidrIp: 127.0.0.1/32
+          Description: Evita la regla de salida global implicita de EC2.
+      Tags:
+        - {Key: Deployment, Value: !Ref 'AWS::StackName'}
+  ClientSsh:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !GetAtt ClientSecurityGroup.GroupId
+      IpProtocol: tcp
+      FromPort: 22
+      ToPort: 22
+      CidrIp: !Ref SshIngressCidr
+      Description: SSH solo desde la IPv4 /32 autorizada.
+  BackendSsh:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !GetAtt BackendSecurityGroup.GroupId
+      IpProtocol: tcp
+      FromPort: 22
+      ToPort: 22
+      CidrIp: !Ref SshIngressCidr
+      Description: SSH solo desde la IPv4 /32 autorizada.
+  ClientHttp:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !GetAtt ClientSecurityGroup.GroupId
+      IpProtocol: tcp
+      FromPort: 80
+      ToPort: 80
+      CidrIp: !Ref WebIngressCidr
+      Description: HTTP de demostracion solo desde la IPv4 /32 autorizada.
+  ClientHttps:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !GetAtt ClientSecurityGroup.GroupId
+      IpProtocol: tcp
+      FromPort: 443
+      ToPort: 443
+      CidrIp: !Ref WebIngressCidr
+      Description: Reserva HTTPS; abrir el puerto no instala un certificado.
+  BackendApi:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !GetAtt BackendSecurityGroup.GroupId
+      SourceSecurityGroupId: !GetAtt ClientSecurityGroup.GroupId
+      IpProtocol: tcp
+      FromPort: 8090
+      ToPort: 8090
+      Description: API privada solo desde el grupo del cliente.
+  ClientHttpOutbound:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId: !GetAtt ClientSecurityGroup.GroupId
+      IpProtocol: tcp
+      FromPort: 80
+      ToPort: 80
+      CidrIp: 0.0.0.0/0
+      Description: Descarga HTTP de paquetes.
+  ClientHttpsOutbound:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId: !GetAtt ClientSecurityGroup.GroupId
+      IpProtocol: tcp
+      FromPort: 443
+      ToPort: 443
+      CidrIp: 0.0.0.0/0
+      Description: Descarga HTTPS de paquetes.
+  ClientApiOutbound:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId: !GetAtt ClientSecurityGroup.GroupId
+      DestinationSecurityGroupId: !GetAtt BackendSecurityGroup.GroupId
+      IpProtocol: tcp
+      FromPort: 8090
+      ToPort: 8090
+      Description: API privada del backend.
+  BackendHttpOutbound:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId: !GetAtt BackendSecurityGroup.GroupId
+      IpProtocol: tcp
+      FromPort: 80
+      ToPort: 80
+      CidrIp: 0.0.0.0/0
+      Description: Descarga HTTP de paquetes.
+  BackendHttpsOutbound:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId: !GetAtt BackendSecurityGroup.GroupId
+      IpProtocol: tcp
+      FromPort: 443
+      ToPort: 443
+      CidrIp: 0.0.0.0/0
+      Description: Descarga HTTPS de paquetes.
+  SshKeyPair:
+    Type: AWS::EC2::KeyPair
+    Properties:
+      KeyName: !Sub '${AWS::StackName}-ssh'
+      PublicKeyMaterial: !Ref SshPublicKey
+      Tags:
+        - {Key: Deployment, Value: !Ref 'AWS::StackName'}
+  ClientInstance:
+    Type: AWS::EC2::Instance
+    DependsOn: [InternetRoute, SubnetRouteAssociation]
+    Properties:
+      ImageId: !Ref AmazonLinuxAmi
+      InstanceType: !Ref InstanceType
+      KeyName: !Ref SshKeyPair
+      CreditSpecification: {CPUCredits: standard}
+      MetadataOptions:
+        HttpEndpoint: enabled
+        HttpTokens: required
+        HttpPutResponseHopLimit: 1
+      NetworkInterfaces:
+        - DeviceIndex: '0'
+          AssociatePublicIpAddress: true
+          PrivateIpAddress: 10.42.1.10
+          SubnetId: !Ref PublicSubnet
+          GroupSet: [!GetAtt ClientSecurityGroup.GroupId]
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs: {VolumeSize: 12, VolumeType: gp3, Encrypted: true, DeleteOnTermination: true}
+      Tags:
+        - {Key: Name, Value: !Sub '${AWS::StackName}-cliente'}
+        - {Key: Deployment, Value: !Ref 'AWS::StackName'}
+        - {Key: ManagedBy, Value: CloudFormation}
+  BackendInstance:
+    Type: AWS::EC2::Instance
+    DependsOn: [InternetRoute, SubnetRouteAssociation]
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Conserva el disco que alojara MySQL en caso de eliminacion o reemplazo.
+        must: [Respaldar MySQL; una instancia retenida requiere limpieza manual y conserva costos.]
+    Properties:
+      ImageId: !Ref AmazonLinuxAmi
+      InstanceType: !Ref InstanceType
+      KeyName: !Ref SshKeyPair
+      CreditSpecification: {CPUCredits: standard}
+      MetadataOptions:
+        HttpEndpoint: enabled
+        HttpTokens: required
+        HttpPutResponseHopLimit: 1
+      NetworkInterfaces:
+        - DeviceIndex: '0'
+          AssociatePublicIpAddress: true
+          PrivateIpAddress: 10.42.1.20
+          SubnetId: !Ref PublicSubnet
+          GroupSet: [!GetAtt BackendSecurityGroup.GroupId]
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs: {VolumeSize: 20, VolumeType: gp3, Encrypted: true, DeleteOnTermination: true}
+      Tags:
+        - {Key: Name, Value: !Sub '${AWS::StackName}-backend'}
+        - {Key: Deployment, Value: !Ref 'AWS::StackName'}
+        - {Key: ManagedBy, Value: CloudFormation}
+Outputs:
+  VpcId:
+    Description: Red exclusiva de este stack, distinta de la administrada por Pulumi.
+    Value: !Ref Vpc
+  ClientInstanceId:
+    Description: Instancia cliente; utilizar para iniciar o detener el laboratorio.
+    Value: !Ref ClientInstance
+  BackendInstanceId:
+    Description: Instancia backend; contiene los datos al instalar MySQL.
+    Value: !Ref BackendInstance
+  ClientPublicIp:
+    Description: IP dinamica del cliente; consultar de nuevo tras detener e iniciar.
+    Value: !GetAtt ClientInstance.PublicIp
+  BackendPublicIp:
+    Description: IP dinamica del backend; consultar de nuevo tras detener e iniciar.
+    Value: !GetAtt BackendInstance.PublicIp
+  ClientPrivateIp:
+    Description: Direccion privada del cliente Nginx.
+    Value: !GetAtt ClientInstance.PrivateIp
+  BackendPrivateIp:
+    Description: Destino de proxy_pass de Nginx, puerto 8090.
+    Value: !GetAtt BackendInstance.PrivateIp
+  FrontendUrl:
+    Description: Disponible despues de instalar Nginx y la aplicacion manualmente.
+    Value: !Sub 'http://${ClientInstance.PublicIp}'
+  ClientSsh:
+    Description: Comando desde el PC que conserva la clave privada correspondiente.
+    Value: !Sub 'ssh -i ~/globomatics-ec2 ec2-user@${ClientInstance.PublicIp}'
+  BackendSsh:
+    Description: Comando desde el PC que conserva la clave privada correspondiente.
+    Value: !Sub 'ssh -i ~/globomatics-ec2 ec2-user@${BackendInstance.PublicIp}'

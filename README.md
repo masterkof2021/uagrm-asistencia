@@ -14,6 +14,8 @@ Las configuraciones de Nginx y systemd permanecen en `deploy/` como parte de la 
 
 ## Despliegue manual en dos servidores
 
+La alternativa academica con **CloudFormation**, su template y los tres controles de seguridad (Trivy, Gitleaks y OPA/Conftest) esta en [`infra/cloudformation/`](infra/cloudformation/README.md). El stack independiente `asistencia-cfn-lab` llego a `CREATE_COMPLETE` y ambas conexiones SSH se verificaron el 23 de octubre de 2026; no reemplaza ni importa los recursos de Pulumi. Incluye resultados locales, hallazgos pendientes y pasos de presentacion. La aplicacion no se instala automaticamente en estas nuevas EC2.
+
 - **Servidor cliente:** instala Nginx y sirve `public/`. Reenvía `/api` a la IP privada del backend. No requiere Node.js, npm ni MySQL.
 - **Servidor backend:** instala Node.js 24, npm y MySQL 8.0 o superior. Ejecuta la API (negocio y repositorios) y MySQL como servicios separados del mismo equipo.
 

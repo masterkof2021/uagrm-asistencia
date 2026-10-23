@@ -1,0 +1,5 @@
+[
+  {"ParameterKey":"SshIngressCidr","ParameterValue":"203.0.113.10/32"},
+  {"ParameterKey":"WebIngressCidr","ParameterValue":"203.0.113.10/32"},
+  {"ParameterKey":"InstanceType","ParameterValue":"t3.micro"}
+]

@@ -1,0 +1,33 @@
+AWSTemplateFormatVersion: "2010-09-09"
+
+Description: Bucket S3 de Globomatics (ejemplo 1)
+
+Parameters:
+  Proyecto:
+    Type: String
+    Default: globomatics
+
+  Ambiente:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, qa, prod]
+
+Resources:
+  Bucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "${Proyecto}-${Ambiente}-${AWS::AccountId}"
+      Tags:
+        - Key: Proyecto
+          Value: !Ref Proyecto
+        - Key: Ambiente
+          Value: !Ref Ambiente
+
+Outputs:
+  NombreBucket:
+    Description: Nombre del bucket creado
+    Value: !Ref Bucket
+
+  ArnBucket:
+    Description: ARN del bucket (su identificador completo en AWS)
+    Value: !GetAtt Bucket.Arn

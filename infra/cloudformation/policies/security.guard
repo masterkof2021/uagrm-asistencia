@@ -1,0 +1,27 @@
+let instances = Resources.*[ Type == 'AWS::EC2::Instance' ]
+
+rule ec2_imdsv2 when %instances !empty {
+  %instances.Properties.MetadataOptions.HttpTokens == 'required'
+}
+
+rule ec2_encrypted_disks when %instances !empty {
+  %instances.Properties.BlockDeviceMappings !empty
+  %instances.Properties.BlockDeviceMappings[*].Ebs.Encrypted == true
+}
+
+rule ec2_cpu_standard when %instances !empty {
+  %instances.Properties.CreditSpecification.CPUCredits == 'standard'
+}
+
+rule private_api {
+  Resources.BackendApi.Properties.FromPort == 8090
+  Resources.BackendApi.Properties.ToPort == 8090
+  Resources.BackendApi.Properties.SourceSecurityGroupId.'Fn::GetAtt'[0] == 'ClientSecurityGroup'
+  Resources.BackendApi.Properties.CidrIp !exists
+}
+
+let ingress = Resources.*[ Type == 'AWS::EC2::SecurityGroupIngress' ]
+let global_ingress = %ingress[ Properties.CidrIp == '0.0.0.0/0' ]
+rule no_global_ingress {
+  %global_ingress empty
+}

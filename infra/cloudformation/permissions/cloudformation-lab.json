@@ -1,0 +1,35 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ConsultarAmiPublicaDelLaboratorio",
+      "Effect": "Allow",
+      "Action": "ssm:GetParameters",
+      "Resource": "arn:aws:ssm:us-east-2::parameter/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-6.18-x86_64",
+      "Condition": {"StringEquals": {"aws:RequestedRegion": "us-east-2"}}
+    },
+    {
+      "Sid": "ValidarYListarEnOhio",
+      "Effect": "Allow",
+      "Action": ["cloudformation:ValidateTemplate", "cloudformation:GetTemplateSummary", "cloudformation:ListStacks"],
+      "Resource": "*",
+      "Condition": {"StringEquals": {"aws:RequestedRegion": "us-east-2"}}
+    },
+    {
+      "Sid": "AdministrarSoloStacksDelLaboratorio",
+      "Effect": "Allow",
+      "Action": [
+        "cloudformation:CreateStack", "cloudformation:UpdateStack", "cloudformation:DeleteStack",
+        "cloudformation:DescribeStacks", "cloudformation:DescribeStackResources", "cloudformation:ListStackResources",
+        "cloudformation:GetTemplate", "cloudformation:CreateChangeSet", "cloudformation:DescribeChangeSet",
+        "cloudformation:ListChangeSets", "cloudformation:ExecuteChangeSet", "cloudformation:DeleteChangeSet",
+        "cloudformation:DescribeEvents"
+      ],
+      "Resource": [
+        "arn:aws:cloudformation:us-east-2:487450071663:stack/asistencia-cfn-*/*",
+        "arn:aws:cloudformation:us-east-2:487450071663:changeSet/asistencia-cfn-*/*"
+      ],
+      "Condition": {"StringEquals": {"aws:RequestedRegion": "us-east-2"}}
+    }
+  ]
+}

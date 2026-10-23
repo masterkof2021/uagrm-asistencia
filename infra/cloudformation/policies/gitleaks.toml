@@ -1,0 +1,9 @@
+title = "Secretos y control de demostracion del laboratorio"
+[extend]
+useDefault = true
+
+[[rules]]
+id = "lab-demo-token"
+description = "Token ficticio para comprobar el escaner; no es una credencial real"
+regex = '''LAB_DEMO_TOKEN_[A-Za-z0-9]{32}'''
+keywords = ["LAB_DEMO_TOKEN_"]

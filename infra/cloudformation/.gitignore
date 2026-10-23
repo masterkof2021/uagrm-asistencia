@@ -1,0 +1,5 @@
+.tools/
+reports/
+parameters.local.json
+*.local.json
+__pycache__/

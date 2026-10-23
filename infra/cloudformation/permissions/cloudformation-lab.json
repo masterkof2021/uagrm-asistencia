@@ -23,7 +23,7 @@
         "cloudformation:DescribeStacks", "cloudformation:DescribeStackResources", "cloudformation:ListStackResources",
         "cloudformation:GetTemplate", "cloudformation:CreateChangeSet", "cloudformation:DescribeChangeSet",
         "cloudformation:ListChangeSets", "cloudformation:ExecuteChangeSet", "cloudformation:DeleteChangeSet",
-        "cloudformation:DescribeEvents"
+        "cloudformation:DescribeEvents", "cloudformation:DescribeStackEvents"
       ],
       "Resource": [
         "arn:aws:cloudformation:us-east-2:487450071663:stack/asistencia-cfn-*/*",

@@ -25,3 +25,15 @@ let global_ingress = %ingress[ Properties.CidrIp == '0.0.0.0/0' ]
 rule no_global_ingress {
   %global_ingress empty
 }
+
+let egress = Resources.*[ Type == 'AWS::EC2::SecurityGroupEgress' ]
+let global_egress = %egress[ Properties.CidrIp == '0.0.0.0/0' ]
+rule no_global_egress {
+  %global_egress empty
+}
+
+rule rejected_vpc_flow_logs {
+  Resources.VpcRejectFlowLog.Type == 'AWS::EC2::FlowLog'
+  Resources.VpcRejectFlowLog.Properties.ResourceId.Ref == 'Vpc'
+  Resources.VpcRejectFlowLog.Properties.TrafficType == 'REJECT'
+}

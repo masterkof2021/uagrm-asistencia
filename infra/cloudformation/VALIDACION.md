@@ -1,5 +1,16 @@
 # Evidencia local y limites de la entrega
 
+## Estado actual verificado, 23-10-2026
+
+Evidencia proporcionada por el estudiante: UPDATE_COMPLETE, buckets reincorporados sin reemplazar EC2, Flow Log ACTIVE/SUCCESS/REJECT y sin error, grupos sin salidas globales IPv4/IPv6. `dnf makecache`, metadata de express en npm y descarga HTTPS de RPM-GPG-KEY-mysql-2025 funcionan desde cliente y backend. Se agregaron las IP de MySQL observadas en Ohio mediante dos actualizaciones exclusivas de ApprovedDownloads. Ambas EC2 quedaron stopped. No se verifico una instalacion completa de paquetes ni se instalo la aplicacion.
+
+El template actual tiene 33 recursos. Reporte del estudiante `reports/20261023-130406`: cfn-lint 0, Guard 0, Conftest 0, Gitleaks 0 y Trivy 1 con exclusivamente AWS-0132 (SSE-S3 en vez de clave KMS propia, excepcion explicita de presupuesto). Pruebas negativas repetidas correctamente: `negative-c3ae5ee7` y `negative-151133ac`. Los reportes permanecen privados y excluidos de Git.
+
+No se ha verificado aun drift de todos los recursos importados, contenido de registros de trafico rechazado en S3 ni retencion de CloudTrail. Ver REMEDIACION-TRIVY.md para alcance, costos y decisiones.
+
+## Historial de la validacion inicial (23 recursos, antes de remediacion)
+
+
 Fecha de revision: 23 de octubre de 2026, America/La_Paz. Se ejecutaron los escaneres en Windows, con Python 3.14 en un entorno aislado. Posteriormente el estudiante desplego el stack y compartio las salidas de AWS y SSH que se registran al final de este documento.
 
 Compatibilidad comprobada adicionalmente con Windows PowerShell 5.1: se corrigio la captura de stderr nativo con `scripts/run-tool.py`, porque los mensajes INFO de Trivy se convertian en `NativeCommandError` antes de completar el runner. La repeticion completa genero la tabla de las cinco herramientas, con Trivy=1 por hallazgos y las otras cuatro=0. Reporte de esa comprobacion: `reports/20261023-031126/`. Los streams se conservan en archivos separados; no se ignoran los codigos de salida.
@@ -35,6 +46,10 @@ No se han creado proxies, NAT Gateways, firewalls ni endpoints con cargo adicion
 
 No se habilitaron VPC Flow Logs. Los grupos de seguridad siguen funcionando, pero falta esa fuente de observabilidad de trafico. Remediacion posible: logs hacia CloudWatch o S3 con permisos de servicio y retencion controlada. Puede generar cargos por ingestion, almacenamiento y consultas. No se habilita automaticamente debido al presupuesto del laboratorio. Sigue pendiente.
 
+## Remediacion posterior preparada localmente
+
+La descripcion anterior corresponde al template desplegado inicialmente. El 23-10-2026 se prepararon cambios locales de egress y Flow Logs. Los cinco hallazgos originales ya no aparecen en el template local; permanece AWS-0132 por conservar SSE-S3, decision explicita del estudiante. Esta fase local fue seguida por el despliegue y las pruebas indicadas en Estado actual verificado. Ver [REMEDIACION-TRIVY.md](REMEDIACION-TRIVY.md) para evidencia, excepcion y limites.
+
 ## Controles negativos
 
 Ejecutado `scripts/test-scanners.py`. Resultado: los cuatro controles verificaron rechazos esperados, sin modificar el template principal.
@@ -64,4 +79,4 @@ Evidencia proporcionada por el estudiante el 23 de octubre de 2026:
 
 Las dos conexiones SSH con la clave privada conservada en el PC funcionaron. `hostname` mostro las IP privadas previstas y `/etc/os-release` identifico Amazon Linux `2023.12.20261021`. Las IP publicas son observaciones del despliegue y pueden cambiar al detener/iniciar.
 
-No se instalaron Nginx/Node.js/MySQL ni se migraron datos a estas EC2 en esta validacion. Tampoco se comprobo comunicacion de API con procesos reales, retencion de auditoria/CloudTrail, actualizaciones de stack o eliminacion/recuperacion con Retain. Los cinco hallazgos de Trivy siguen pendientes. No se debe administrar el mismo recurso desde Pulumi y CloudFormation. Al terminar la practica, detener las nuevas instancias o preparar una limpieza explicita, considerando el backend Retain y sus costos.
+No se instalaron Nginx/Node.js/MySQL ni se migraron datos a estas EC2 en esta validacion. Tampoco se comprobo comunicacion de API con procesos reales, retencion de auditoria/CloudTrail, actualizaciones de stack o eliminacion/recuperacion con Retain. Los cinco hallazgos iniciales fueron remediados posteriormente, como indica el estado actual al comienzo de este documento. No se debe administrar el mismo recurso desde Pulumi y CloudFormation. Al terminar la practica, detener las nuevas instancias o preparar una limpieza explicita, considerando el backend Retain y sus costos.

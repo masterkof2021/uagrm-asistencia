@@ -2,4 +2,5 @@
 reports/
 parameters.local.json
 *.local.json
+*.local.yaml
 __pycache__/

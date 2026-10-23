@@ -2,6 +2,29 @@ package main
 
 import rego.v1
 
+deny contains sprintf("%s: salida global no permitida", [name]) if {
+  some name, resource in input.Resources
+  resource.Type == "AWS::EC2::SecurityGroupEgress"
+  object.get(resource.Properties, "CidrIp", "") == "0.0.0.0/0"
+}
+
+deny contains sprintf("%s: salida IPv6 global no permitida", [name]) if {
+  some name, resource in input.Resources
+  resource.Type == "AWS::EC2::SecurityGroupEgress"
+  object.get(resource.Properties, "CidrIpv6", "") == "::/0"
+}
+
+deny contains "Vpc: falta Flow Log de rechazos" if {
+  flow := object.get(input.Resources, "VpcRejectFlowLog", {})
+  props := object.get(flow, "Properties", {})
+  object.get(props, "TrafficType", "") != "REJECT"
+}
+
+deny contains "ApprovedDownloads: solo se permiten destinos IPv4 /32" if {
+  some entry in input.Resources.ApprovedDownloads.Properties.Entries
+  not endswith(entry.Cidr, "/32")
+}
+
 # OPA no incluye estas politicas por defecto: son reglas del laboratorio.
 deny contains sprintf("%s: IMDSv2 debe ser obligatorio", [name]) if {
   some name, resource in input.Resources

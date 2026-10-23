@@ -2,7 +2,7 @@
 
 Este laboratorio prepara la defensa academica del aprovisionamiento de los mismos dos servidores usados con Terraform/OpenTofu/Pulumi. El template principal es **`templates/asistencia.yaml`**. Se despliega en un stack **nuevo**, por ejemplo `asistencia-cfn-lab`, sin transferir ni tocar recursos de Pulumi.
 
-**Estado de entrega:** stack `asistencia-cfn-lab` desplegado en Ohio con `CREATE_COMPLETE` y SSH verificado a ambas EC2 el 23 de octubre de 2026, mediante comandos ejecutados por el estudiante y salidas revisadas durante el acompanamiento. Los cinco hallazgos de Trivy permanecen abiertos. Ver `VALIDACION.md` para la evidencia y los limites de las comprobaciones. La aplicacion aun no esta instalada en estas nuevas instancias.
+**Estado de entrega (23-10-2026):** stack `asistencia-cfn-lab` actualizado en Ohio con `UPDATE_COMPLETE`, 33 recursos, salidas restringidas por listas autorizadas y VPC Flow Logs ACTIVE/SUCCESS para REJECT. Se comprobaron `dnf makecache`, consulta npm y descarga de la clave MySQL desde ambas EC2; ambas quedaron detenidas. Trivy conserva solo AWS-0132 por la excepcion SSE-S3 aprobada; Conftest y Gitleaks pasan. Las pruebas negativas detectan los fallos esperados. Ver [REMEDIACION-TRIVY.md](REMEDIACION-TRIVY.md) y [VALIDACION.md](VALIDACION.md). La aplicacion aun no esta instalada en estas nuevas instancias.
 
 ## Contexto de la clase y archivos recibidos
 
@@ -38,9 +38,9 @@ ZIP original: `01.1-s3-bucket-ec2.zip`, SHA-256 `144523A99A301EC7128D71A5B693D0B
 | Inventario | Grupo de recursos con etiqueta `Deployment` exclusiva del stack |
 | Aplicacion | Nginx, Node.js y MySQL se instalan manualmente; no se aprovisionan por este template |
 
-El template tiene **23 recursos**, no 18: CloudFormation separa attachment/ruta de recursos que Pulumi agrupa, y se separan cinco reglas de salida. El numero no mide equivalencia por si mismo.
+El template actual tiene **33 recursos**: incluye las reglas de salida independientes, una lista de destinos autorizados, Flow Logs y dos buckets de auditoria con sus politicas. El numero no mide equivalencia por si mismo.
 
-Cambios de seguridad deliberados respecto a Pulumi: web 80/443 limitada a la IP /32 del presentador; salida limitada a HTTP/HTTPS y API privada, en lugar de todos los protocolos; creditos CPU `standard` para evitar cargos de CPU excedente. La IP del docente puede ser distinta: en ese caso la pagina no sera accesible desde su conexion hasta actualizar el parametro autorizado.
+Cambios de seguridad deliberados respecto a Pulumi: web 80/443 limitada a la IP /32 del presentador; salida HTTP/HTTPS restringida a listas de destinos autorizados y API privada; creditos CPU `standard` para evitar cargos de CPU excedente. La IP del docente puede ser distinta: en ese caso la pagina no sera accesible desde su conexion hasta actualizar el parametro autorizado.
 
 Dos VPC pueden repetir estos CIDR sin conectarse entre ellas. No crear peering/rutas entre ellas sin redisenar las redes superpuestas. Nombres fisicos derivados de `AWS::StackName` evitan colisiones con `globomatics-lab` de Pulumi.
 
@@ -110,7 +110,9 @@ Genera copias en `reports/negative-.../`: IMDS opcional, disco sin cifrar, SSH g
 
 El usuario IAM `pulumi-estudiante` tiene los permisos del laboratorio para EC2/Resource Groups/lectura SSM en Ohio y el estudiante agrego `CloudFormationLaboratorioOhio` usando `permissions/cloudformation-lab.json`. El complemento permite stacks y change sets `asistencia-cfn-*` y la lectura `ssm:GetParameters` del parametro publico exacto de la AMI. Para otro usuario, revisar y asignar el complemento mediante una identidad administradora; no adjuntar `AdministratorAccess`. La consola web puede requerir permisos adicionales de lectura/S3 para subir archivos, por lo que la ruta CLI evita un bucket de carga del template.
 
-El complemento no concede `iam:PassRole` ni crea usuarios. CloudFormation usa una sesion derivada del operador, sin execution role adicional. Los permisos de recursos existentes siguen siendo necesarios: el complemento no reduce los permisos EC2 que ya tenga el usuario. Se verificaron listado, lectura SSM, validacion, creacion de change set y consulta del stack en vivo. No se han probado todas las operaciones de actualizacion o eliminacion de la politica; cualquier `AccessDenied` debe diagnosticarse por accion y recurso.
+Para los buckets y la entrega de Flow Logs se adjunta ademas la politica administrada por el cliente `CloudFormationFlowLogsLaboratorioOhio`, definida en `permissions/flow-logs-lab.json`; evita el limite acumulado de 2048 caracteres de politicas insertadas en un usuario.
+
+El complemento no concede `iam:PassRole` ni crea usuarios. CloudFormation usa una sesion derivada del operador, sin execution role adicional. Los permisos de recursos existentes siguen siendo necesarios: el complemento no reduce los permisos EC2 que ya tenga el usuario. Se verificaron listado, lectura SSM, validacion, creacion de change set y consulta del stack en vivo. Se probaron las actualizaciones documentadas; no todas las operaciones de eliminacion de la politica; cualquier `AccessDenied` debe diagnosticarse por accion y recurso.
 
 Preparar solo una clave publica y la IPv4 actual, nunca passwords ni tokens:
 
@@ -127,9 +129,9 @@ Se escribe `parameters.local.json`, excluido de Git. `parameters.scan.json` usa 
 1. Mantener los servidores Pulumi detenidos para no pagar dos laboratorios encendidos.
 2. Abrir CloudFormation en **Ohio/us-east-2** y comprobar la cuenta.
 3. Crear stack con recursos nuevos y cargar **`templates/asistencia.yaml`**. La subida web puede almacenar una copia del template en S3; no es un backend de estado Terraform.
-4. Nombre `asistencia-cfn-lab`. Completar SshIngressCidr y WebIngressCidr con la IPv4 publica actual + `/32`, y SshPublicKey con el contenido del archivo `.pub`.
+4. Nombre `asistencia-cfn-lab`. Completar SshIngressCidr y WebIngressCidr con la IPv4 publica actual + `/32`, y SshPublicKey con el contenido del archivo `.pub`. Obtener S3PrefixListId con New-LabParameters.ps1; conservar IncludePublicOutputs=false para permitir actualizaciones con EC2 detenidas. Consultar las IP publicas vigentes desde EC2 al iniciarlas.
 5. Conservar `t3.micro` y el parametro SSM de Amazon Linux. No crear IAM ni aceptar capacidades IAM innecesarias: el template no incluye recursos IAM.
-6. Revisar opciones/rollback, etiquetas y costos. Crear un **change set** para revisar los 23 recursos nuevos. No importar los IDs de Pulumi.
+6. Revisar opciones/rollback, etiquetas y costos. Crear un **change set** para revisar los 33 recursos nuevos. No importar los IDs de Pulumi.
 7. Tras revisar los hallazgos y permisos, ejecutar el change set. Aqui comienza la creacion de servidores y el consumo AWS. Esperar `CREATE_COMPLETE` y revisar eventos/recursos/outputs. Si falla, diagnosticar el primer fallo y los efectos de rollback/Retain; no crear stacks repetidos a ciegas.
 8. Mostrar outputs y probar SSH. La aplicacion no se instala automaticamente; aprovisionar servidores es el requisito de esta defensa. Si se quiere tambien la web, seguir la guia manual con los outputs de **CloudFormation**, nunca los de Pulumi.
 
@@ -143,7 +145,7 @@ Solo despues de validar herramientas, revisar hallazgos y preparar permisos/para
 
 El script comprueba la cuenta, valida el template en el servicio y crea un change set tipo CREATE; **no lo ejecuta**. Deja el stack en revision. No usarlo para actualizar un stack existente; para UPDATE revisar el template actual y preparar un change set especifico.
 
-Consultar validaciones del servicio por `aws cloudformation describe-events --stack-name asistencia-cfn-lab --profile pulumi-lab --region us-east-2 --no-cli-pager`. Esta fase de permisos/cuotas/AMI solo se podra declarar validada cuando realmente se ejecute en la cuenta. Los eventos disponibles por defecto no equivalen a tener habilitado un trail completo de CloudTrail: no se comprobo la retencion de auditoria de la cuenta.
+Consultar validaciones del servicio por `aws cloudformation describe-stack-events --stack-name asistencia-cfn-lab --profile pulumi-lab --region us-east-2 --no-cli-pager`. Esta fase de permisos/cuotas/AMI solo se podra declarar validada cuando realmente se ejecute en la cuenta. Los eventos disponibles por defecto no equivalen a tener habilitado un trail completo de CloudTrail: no se comprobo la retencion de auditoria de la cuenta.
 
 Para ejecutar un change set ya revisado, recuperar su nombre sin escribir marcadores:
 
@@ -186,3 +188,13 @@ La eliminacion definitiva se prepara por separado con respaldo y decision sobre 
 6. Explicar estado administrado por AWS, costos, retencion y detencion de instancias.
 
 Fuentes: [CloudFormation](https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/Welcome.html), [cfn-lint](https://github.com/aws-cloudformation/cfn-lint), [Guard](https://github.com/aws-cloudformation/cloudformation-guard), [Trivy CloudFormation](https://trivy.dev/docs/latest/guide/coverage/iac/cloudformation/), [Conftest](https://www.conftest.dev/), [Gitleaks](https://github.com/gitleaks/gitleaks).
+
+## Actualizar el laboratorio existente
+
+Para esta cuenta, los buckets fueron retenidos durante un rollback y despues reincorporados. Usar:
+
+```powershell
+.\scripts\New-ChangeSet.ps1 -ChangeSetType UPDATE -RecoverRetainedBuckets
+```
+
+El switch mantiene sus nombres literales y solo importa buckets pendientes; no los recrea. Conserva la representacion YAML de las referencias para evitar reemplazos por conversion a JSON. El script no ejecuta cambios, bloquea modificaciones en instancias, eliminaciones y reemplazos no previstos. Revisar cada propuesta antes de ejecutarla. La lista de IP de npm/MySQL requiere mantenimiento; ver `scripts/refresh-egress.py` y `policies/egress-observations.json`. Las descargas comprobadas no demuestran que todos los paquetes, redirects o dominios de dependencias esten autorizados.

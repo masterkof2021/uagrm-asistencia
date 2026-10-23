@@ -16,6 +16,9 @@ if errors:
 template['Resources']['ClientInstance']['Properties']['MetadataOptions']['HttpTokens'] = 'optional'
 template['Resources']['BackendInstance']['Properties']['BlockDeviceMappings'][0]['Ebs']['Encrypted'] = False
 template['Resources']['ClientSsh']['Properties']['CidrIp'] = '0.0.0.0/0'
+template['Resources']['ClientHttpsOutbound']['Properties'].pop('DestinationPrefixListId')
+template['Resources']['ClientHttpsOutbound']['Properties']['CidrIp'] = '0.0.0.0/0'
+del template['Resources']['VpcRejectFlowLog']
 bad = reports / 'DO-NOT-DEPLOY.json'
 bad.write_text(json.dumps(template, indent=2), encoding='utf-8')
 secret_dir = reports / 'synthetic-secret'
@@ -41,11 +44,19 @@ def run(name, command, expected_text=None):
         raise SystemExit(f'{name}: el control negativo paso inesperadamente.')
     return result
 
-run('guard', [tool('guard', 'cfn-guard.exe'), 'validate', '--data', str(bad), '--rules', str(root / 'policies/security.guard'), '--output-format', 'json', '--structured', '--show-summary', 'none'], 'ec2_imdsv2')
-run('conftest', [tool('conftest', 'conftest.exe'), 'test', str(bad), '--policy', str(root / 'policies/security.rego'), '--output', 'json'], 'IMDSv2')
+guard = run('guard', [tool('guard', 'cfn-guard.exe'), 'validate', '--data', str(bad), '--rules', str(root / 'policies/security.guard'), '--output-format', 'json', '--structured', '--show-summary', 'none'], 'ec2_imdsv2')
+conftest = run('conftest', [tool('conftest', 'conftest.exe'), 'test', str(bad), '--policy', str(root / 'policies/security.rego'), '--output', 'json'], 'IMDSv2')
+for expected in ('no_global_egress', 'rejected_vpc_flow_logs'):
+    if expected not in guard.stdout:
+        raise SystemExit(f'Guard: falta control {expected}')
+for expected in ('salida global', 'falta Flow Log'):
+    if expected not in conftest.stdout:
+        raise SystemExit(f'Conftest: falta control {expected}')
 trivy = run('trivy', [tool('trivy', 'trivy.exe'), 'config', '--cache-dir', str(tools / 'trivy-cache'), '--misconfig-scanners', 'cloudformation', '--cf-params', str(root / 'parameters.scan.json'), '--format', 'json', '--exit-code', '1', str(bad)])
 trivy_data = json.loads(trivy.stdout)
 findings = [finding for resource in trivy_data.get('Results', []) for finding in resource.get('Misconfigurations', [])]
+if not {'AWS-0104', 'AWS-0178'}.issubset({f['ID'] for f in findings}):
+    raise SystemExit('Trivy: falta detectar la salida global o la ausencia de Flow Logs.')
 if not any(f['ID'] in ('AWS-0028', 'AWS-0008', 'AWS-0107') or 'encrypt' in f.get('Title', '').lower() or 'imds' in f.get('Title', '').lower() for f in findings):
     raise SystemExit('Trivy: falta el hallazgo de cifrado o IMDS del control negativo.')
 secret_report = reports / 'gitleaks-findings.json'

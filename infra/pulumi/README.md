@@ -3,6 +3,8 @@
 Equivalente en TypeScript de los 18 recursos del módulo raíz de `../../../terraform/` (`config.tf`, `network.tf`, `compute.tf` y `outputs.tf`). Este programa es independiente de Terraform: no carga archivos `.tf` ni utiliza su estado.
 
 ## Despliegue 
+El laboratorio vigente utiliza el stack **`lab-estudiante`**, perfil AWS `pulumi-lab` y backend local `file://~`. Consultar la [bitácora y guía de operación](../../docs/laboratorio-pulumi-estudiante.md), que tiene prioridad sobre los ejemplos históricos con `lab`, S3 u OpenTofu de este documento.
+
 Los IDs y las IP públicas no se documentan porque cambian; consúltalos con pulumi stack output servers.
 
 Verificación realizada: `pulumi preview --expect-no-changes` sin cambios pendientes y conexión SSH correcta a ambos EC2. Se guardó un respaldo del nuevo estado en `.pulumi/rebuild-2026-10-20.json`.
@@ -11,7 +13,7 @@ Verificación realizada: `pulumi preview --expect-no-changes` sin cambios pendie
 
 El estado se guarda en file://~ (carpeta .pulumi del usuario). Haz copias con pulumi stack export y respalda esa carpeta: sin el estado, Pulumi no puede administrar los recursos creados.
 
-El proyecto separado [`bootstrap/`](bootstrap/README.md), stack `shared`, administra el bucket y guarda su estado en el mismo backend. Consulta su guía para permisos, incorporación de compañeros y recuperación. La contraseña de secretos permanece fuera de S3 y Git.
+El proyecto separado [`bootstrap/`](bootstrap/README.md), stack `shared`, corresponde al backend S3 histórico y no se utiliza en este laboratorio. No ejecutar sus comandos para el despliegue personal.
 
 ## Infraestructura reproducida
 

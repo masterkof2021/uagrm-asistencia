@@ -1,6 +1,6 @@
 import * as aws from "@pulumi/aws";
 import * as pulumi from "@pulumi/pulumi";
-import { options, project, suffix, tags } from "./src/config";
+import { config, options, project, suffix, tags } from "./src/config";
 import { client, backend } from "./src/compute";
 
 new aws.resourcegroups.Group("globomatics", {
@@ -14,7 +14,11 @@ new aws.resourcegroups.Group("globomatics", {
     }),
   },
   tags: tags(`rg-${suffix}`),
-}, options);
+}, {
+  ...options,
+  // Configuración temporal para incorporar un grupo existente con este proveedor.
+  import: config.get("resourceGroupImportId"),
+});
 export const servers = {
   client: { id: client.id, public_ip: client.publicIp, public_dns: client.publicDns, private_ip: client.privateIp },
   backend: { id: backend.id, public_ip: backend.publicIp, private_ip: backend.privateIp },

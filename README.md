@@ -6,7 +6,9 @@ Aplicación en tres capas con **cliente ligero y backend que se levantan por sep
 
 La infraestructura de esta aplicación se define con **Pulumi y TypeScript** en [`infra/pulumi/`](infra/pulumi/README.md). Reproduce los 18 recursos del laboratorio de la carpeta hermana `terraform`: red, seguridad, clave pública y dos EC2 con discos cifrados. Su README contiene la configuración, validación y correspondencia para importar los recursos existentes.
 
-El laboratorio se despliega en una cuenta AWS propia con el stack `lab` de `infra/pulumi`. El estado de Pulumi se guarda en un backend local (`file://~`), sin depender de ningún bucket S3. La contraseña de cifrado del stack permanece fuera de Git y debe guardarse en un gestor de contraseñas; sin ella no se pueden descifrar los secretos del stack. El proyecto `infra/pulumi/bootstrap` crea un bucket S3 para compartir el estado entre varias personas y no se usa en este despliegue.
+El laboratorio se despliega en una cuenta AWS propia con el stack **`lab-estudiante`** de `infra/pulumi` y el perfil AWS **`pulumi-lab`**, en Ohio (`us-east-2`). El estado de Pulumi se guarda en un backend local (`file://~`), sin depender de ningún bucket S3. La contraseña de cifrado del stack permanece fuera de Git y debe guardarse en un gestor de contraseñas; sin ella no se pueden descifrar los secretos del stack. El proyecto `infra/pulumi/bootstrap` no se usa en este despliegue. El stack anterior `lab` se conserva como antecedente y no debe usarse para administrar estos recursos.
+
+La [bitácora del laboratorio y guía para reanudarlo](docs/laboratorio-pulumi-estudiante.md) registra la validación, los respaldos y los cambios necesarios cuando cambian las IP públicas.
 
 Las configuraciones de Nginx y systemd permanecen en `deploy/` como parte de la aplicación. La [guía de despliegue manual en AWS](docs/despliegue-manual-aws.md) explica cómo instalar y actualizar los servicios sobre los servidores aprovisionados.
 

@@ -1,5 +1,7 @@
 # CloudFormation y tres controles de seguridad
 
+Para el laboratorio de tres servidores, sigue la [guía de plantillas anidadas y Git Sync](GIT-SYNC.md).
+
 Este laboratorio prepara la defensa academica del aprovisionamiento de los mismos dos servidores usados con Terraform/OpenTofu/Pulumi. El template principal es **`templates/asistencia.yaml`**. Se despliega en un stack **nuevo**, por ejemplo `asistencia-cfn-lab`, sin transferir ni tocar recursos de Pulumi.
 
 **Estado de entrega (23-10-2026):** stack `asistencia-cfn-lab` actualizado en Ohio con `UPDATE_COMPLETE`, 33 recursos, salidas restringidas por listas autorizadas y VPC Flow Logs ACTIVE/SUCCESS para REJECT. Se comprobaron `dnf makecache`, consulta npm y descarga de la clave MySQL desde ambas EC2; ambas quedaron detenidas. Trivy conserva solo AWS-0132 por la excepcion SSE-S3 aprobada; Conftest y Gitleaks pasan. Las pruebas negativas detectan los fallos esperados. Ver [REMEDIACION-TRIVY.md](REMEDIACION-TRIVY.md) y [VALIDACION.md](VALIDACION.md). La aplicacion aun no esta instalada en estas nuevas instancias.

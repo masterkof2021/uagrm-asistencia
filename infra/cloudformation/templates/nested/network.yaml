@@ -1,0 +1,202 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Red del laboratorio y auditoria S3 de trafico rechazado.
+Metadata:
+  AWSToolsMetrics:
+    AWSAgentToolkit: aws-cloudformation@3
+Parameters:
+  DeploymentName:
+    Type: String
+    Description: Nombre del stack raiz para nombres y etiquetas comunes.
+Resources:
+  Vpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.42.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - {Key: Name, Value: !Sub '${DeploymentName}-vpc'}
+        - {Key: Deployment, Value: !Ref DeploymentName}
+  PublicSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: 10.42.1.0/24
+      AvailabilityZone: !Select [0, !GetAZs '']
+      MapPublicIpOnLaunch: false
+      Tags:
+        - {Key: Name, Value: !Sub '${DeploymentName}-subred'}
+        - {Key: Deployment, Value: !Ref DeploymentName}
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - {Key: Deployment, Value: !Ref DeploymentName}
+  GatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref Vpc
+      InternetGatewayId: !Ref InternetGateway
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref Vpc
+      Tags:
+        - {Key: Deployment, Value: !Ref DeploymentName}
+  InternetRoute:
+    Type: AWS::EC2::Route
+    DependsOn: GatewayAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+  SubnetRouteAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet
+      RouteTableId: !Ref PublicRouteTable
+  AccessLogsBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Auditoria de acceso al bucket de Flow Logs, sin registrar sus propios accesos recursivamente.
+        must: [Sin acceso publico; expirar versiones actuales y anteriores; retencion independiente del stack.]
+    Properties:
+      BucketName: !Sub '${DeploymentName}-accesslogs-${AWS::AccountId}-${AWS::Region}'
+      OwnershipControls:
+        Rules: [{ObjectOwnership: BucketOwnerEnforced}]
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        IgnorePublicAcls: true
+        BlockPublicPolicy: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault: {SSEAlgorithm: AES256}
+      VersioningConfiguration: {Status: Enabled}
+      LifecycleConfiguration:
+        Rules:
+          - Id: ExpireLabLogs
+            Status: Enabled
+            ExpirationInDays: 7
+            NoncurrentVersionExpiration: {NoncurrentDays: 7}
+            AbortIncompleteMultipartUpload: {DaysAfterInitiation: 1}
+          - Id: RemoveDeleteMarkers
+            Status: Enabled
+            ExpiredObjectDeleteMarker: true
+      Tags:
+        - {Key: Deployment, Value: !Ref DeploymentName}
+  FlowLogsBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Almacena solo trafico rechazado; SSE-S3 evita una clave KMS con cargo mensual fijo.
+        must: [Privado; entrega restringida a cuenta y region; no es backend de estado.]
+    Properties:
+      BucketName: !Sub '${DeploymentName}-flowlogs-${AWS::AccountId}-${AWS::Region}'
+      OwnershipControls:
+        Rules: [{ObjectOwnership: BucketOwnerEnforced}]
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        IgnorePublicAcls: true
+        BlockPublicPolicy: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault: {SSEAlgorithm: AES256}
+      VersioningConfiguration: {Status: Enabled}
+      LoggingConfiguration:
+        DestinationBucketName: !Ref AccessLogsBucket
+        LogFilePrefix: flowlogs-access/
+      LifecycleConfiguration:
+        Rules:
+          - Id: ExpireLabLogs
+            Status: Enabled
+            ExpirationInDays: 7
+            NoncurrentVersionExpiration: {NoncurrentDays: 7}
+            AbortIncompleteMultipartUpload: {DaysAfterInitiation: 1}
+          - Id: RemoveDeleteMarkers
+            Status: Enabled
+            ExpiredObjectDeleteMarker: true
+      Tags:
+        - {Key: Deployment, Value: !Ref DeploymentName}
+  AccessLogsBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref AccessLogsBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AccessLoggingDelivery
+            Effect: Allow
+            Principal: {Service: logging.s3.amazonaws.com}
+            Action: s3:PutObject
+            Resource: !Sub '${AccessLogsBucket.Arn}/flowlogs-access/*'
+            Condition:
+              StringEquals: {'aws:SourceAccount': !Ref 'AWS::AccountId'}
+              ArnEquals: {'aws:SourceArn': !GetAtt FlowLogsBucket.Arn}
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: '*'
+            Action: s3:*
+            Resource: [!GetAtt AccessLogsBucket.Arn, !Sub '${AccessLogsBucket.Arn}/*']
+            Condition:
+              Bool: {'aws:SecureTransport': 'false'}
+  FlowLogsBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref FlowLogsBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: LogDeliveryAclCheck
+            Effect: Allow
+            Principal: {Service: delivery.logs.amazonaws.com}
+            Action: s3:GetBucketAcl
+            Resource: !GetAtt FlowLogsBucket.Arn
+            Condition:
+              StringEquals: {'aws:SourceAccount': !Ref 'AWS::AccountId'}
+              ArnLike: {'aws:SourceArn': !Sub 'arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:*'}
+          - Sid: LogDeliveryWrite
+            Effect: Allow
+            Principal: {Service: delivery.logs.amazonaws.com}
+            Action: s3:PutObject
+            Resource: !Sub '${FlowLogsBucket.Arn}/AWSLogs/${AWS::AccountId}/*'
+            Condition:
+              StringEquals:
+                'aws:SourceAccount': !Ref 'AWS::AccountId'
+                's3:x-amz-acl': bucket-owner-full-control
+              ArnLike: {'aws:SourceArn': !Sub 'arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:*'}
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: '*'
+            Action: s3:*
+            Resource: [!GetAtt FlowLogsBucket.Arn, !Sub '${FlowLogsBucket.Arn}/*']
+            Condition:
+              Bool: {'aws:SecureTransport': 'false'}
+  VpcRejectFlowLog:
+    Type: AWS::EC2::FlowLog
+    DependsOn: [FlowLogsBucketPolicy, AccessLogsBucketPolicy]
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Registra conexiones rechazadas para investigar intentos bloqueados con menor volumen que ALL.
+        must: [No contiene payload; entrega y almacenamiento generan costo; no registrar ACCEPT en este laboratorio.]
+    Properties:
+      ResourceId: !Ref Vpc
+      ResourceType: VPC
+      TrafficType: REJECT
+      LogDestinationType: s3
+      LogDestination: !GetAtt FlowLogsBucket.Arn
+      MaxAggregationInterval: 600
+      Tags:
+        - {Key: Deployment, Value: !Ref DeploymentName}
+Outputs:
+  VpcId:
+    Description: Red exclusiva de este stack, distinta de la administrada por Pulumi.
+    Value: !Ref Vpc
+  PublicSubnetId:
+    Value: !Ref PublicSubnet

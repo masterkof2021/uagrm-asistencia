@@ -1,0 +1,169 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Tres EC2 para Nginx, Node.js y MySQL en el laboratorio de asistencia.
+Metadata:
+  AWSToolsMetrics:
+    AWSAgentToolkit: aws-cloudformation@3
+Parameters:
+  DeploymentName:
+    Type: String
+    Description: Nombre del stack raiz para nombres y etiquetas comunes.
+  SubnetId:
+    Type: AWS::EC2::Subnet::Id
+  ClientSecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+  BackendSecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+  DatabaseSecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+  IncludePublicOutputs:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['false', 'true']
+    Description: Dejar false si alguna EC2 esta detenida; las salidas PublicIp requieren instancias en ejecucion.
+  SshPublicKey:
+    Type: String
+    Description: Contenido de globomatics-ec2.pub; nunca pegar la clave privada.
+    AllowedPattern: '^(ssh-ed25519|ssh-rsa|ecdsa-sha2-\S+) [A-Za-z0-9+/]+={0,2}( .*)?$'
+  InstanceType:
+    Type: String
+    Default: t3.micro
+    AllowedValues: [t3.micro]
+    Description: Tipo de laboratorio limitado para evitar seleccion accidental costosa.
+  ImageId:
+    Type: AWS::EC2::Image::Id
+    Description: AMI resuelta por el stack raiz.
+Conditions:
+  ShowPublicOutputs: !Equals [!Ref IncludePublicOutputs, 'true']
+Resources:
+  SshKeyPair:
+    Type: AWS::EC2::KeyPair
+    Properties:
+      KeyName: !Sub '${DeploymentName}-ssh'
+      PublicKeyMaterial: !Ref SshPublicKey
+      Tags:
+        - {Key: Deployment, Value: !Ref DeploymentName}
+  ClientInstance:
+    Type: AWS::EC2::Instance
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Aloja la web y envia solicitudes API al backend.
+        must: [Entrada web y SSH limitada a IPv4 autorizadas.]
+    Properties:
+      ImageId: !Ref ImageId
+      InstanceType: !Ref InstanceType
+      KeyName: !Ref SshKeyPair
+      CreditSpecification: {CPUCredits: standard}
+      MetadataOptions:
+        HttpEndpoint: enabled
+        HttpTokens: required
+        HttpPutResponseHopLimit: 1
+      NetworkInterfaces:
+        - DeviceIndex: '0'
+          AssociatePublicIpAddress: true
+          PrivateIpAddress: 10.42.1.10
+          SubnetId: !Ref SubnetId
+          GroupSet: [!Ref ClientSecurityGroupId]
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs: {VolumeSize: 12, VolumeType: gp3, Encrypted: true, DeleteOnTermination: true}
+      Tags:
+        - {Key: Name, Value: !Sub '${DeploymentName}-cliente'}
+        - {Key: Deployment, Value: !Ref DeploymentName}
+        - {Key: ManagedBy, Value: CloudFormation}
+  BackendInstance:
+    Type: AWS::EC2::Instance
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Ejecuta la API; MySQL reside en la EC2 de datos.
+        must: [API privada desde Nginx, conexion MySQL por IP privada.]
+    Properties:
+      ImageId: !Ref ImageId
+      InstanceType: !Ref InstanceType
+      KeyName: !Ref SshKeyPair
+      CreditSpecification: {CPUCredits: standard}
+      MetadataOptions:
+        HttpEndpoint: enabled
+        HttpTokens: required
+        HttpPutResponseHopLimit: 1
+      NetworkInterfaces:
+        - DeviceIndex: '0'
+          AssociatePublicIpAddress: true
+          PrivateIpAddress: 10.42.1.20
+          SubnetId: !Ref SubnetId
+          GroupSet: [!Ref BackendSecurityGroupId]
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs: {VolumeSize: 20, VolumeType: gp3, Encrypted: true, DeleteOnTermination: true}
+      Tags:
+        - {Key: Name, Value: !Sub '${DeploymentName}-backend'}
+        - {Key: Deployment, Value: !Ref DeploymentName}
+        - {Key: ManagedBy, Value: CloudFormation}
+  DatabaseInstance:
+    Type: AWS::EC2::Instance
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Conserva el disco que alojara MySQL en caso de eliminacion o reemplazo.
+        must: [Respaldar MySQL antes de cambios, acceso entrante solo desde el backend, salida publica limitada a repositorios.]
+    Properties:
+      ImageId: !Ref ImageId
+      InstanceType: !Ref InstanceType
+      KeyName: !Ref SshKeyPair
+      CreditSpecification: {CPUCredits: standard}
+      MetadataOptions:
+        HttpEndpoint: enabled
+        HttpTokens: required
+        HttpPutResponseHopLimit: 1
+      NetworkInterfaces:
+        - DeviceIndex: '0'
+          AssociatePublicIpAddress: true
+          PrivateIpAddress: 10.42.1.30
+          SubnetId: !Ref SubnetId
+          GroupSet: [!Ref DatabaseSecurityGroupId]
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs: {VolumeSize: 20, VolumeType: gp3, Encrypted: true, DeleteOnTermination: true}
+      Tags:
+        - {Key: Name, Value: !Sub '${DeploymentName}-mysql'}
+        - {Key: Deployment, Value: !Ref DeploymentName}
+        - {Key: ManagedBy, Value: CloudFormation}
+Outputs:
+  ClientInstanceId:
+    Description: Instancia cliente; utilizar para iniciar o detener el laboratorio.
+    Value: !Ref ClientInstance
+  BackendInstanceId:
+    Description: Instancia backend; ejecuta Node.js.
+    Value: !Ref BackendInstance
+  ClientPublicIp:
+    Condition: ShowPublicOutputs
+    Description: IP dinamica del cliente; consultar de nuevo tras detener e iniciar.
+    Value: !GetAtt ClientInstance.PublicIp
+  BackendPublicIp:
+    Condition: ShowPublicOutputs
+    Description: IP dinamica del backend; consultar de nuevo tras detener e iniciar.
+    Value: !GetAtt BackendInstance.PublicIp
+  ClientPrivateIp:
+    Description: Direccion privada del cliente Nginx.
+    Value: !GetAtt ClientInstance.PrivateIp
+  BackendPrivateIp:
+    Description: Destino de proxy_pass de Nginx, puerto 8090.
+    Value: !GetAtt BackendInstance.PrivateIp
+  FrontendUrl:
+    Condition: ShowPublicOutputs
+    Description: Disponible despues de instalar Nginx y la aplicacion manualmente.
+    Value: !Sub 'http://${ClientInstance.PublicIp}'
+  ClientSsh:
+    Condition: ShowPublicOutputs
+    Description: Comando desde el PC que conserva la clave privada correspondiente.
+    Value: !Sub 'ssh -i ~/globomatics-ec2 ec2-user@${ClientInstance.PublicIp}'
+  BackendSsh:
+    Condition: ShowPublicOutputs
+    Description: Comando desde el PC que conserva la clave privada correspondiente.
+    Value: !Sub 'ssh -i ~/globomatics-ec2 ec2-user@${BackendInstance.PublicIp}'
+  DatabaseInstanceId:
+    Description: Instancia de datos con politica de retencion.
+    Value: !Ref DatabaseInstance
+  DatabasePrivateIp:
+    Description: Destino DB_HOST de la API.
+    Value: !GetAtt DatabaseInstance.PrivateIp

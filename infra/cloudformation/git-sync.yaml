@@ -1,0 +1,8 @@
+template-file-path: infra/cloudformation/templates/asistencia-empaquetada.yaml
+parameters:
+  AmazonLinuxAmi: 'ami-02dae70ab25064279'
+  S3PrefixListId: 'pl-7ba54012'
+  OperatorIngressCidrParameter: '/asistencia-cfn-tres/operator-ingress-cidr'
+  SshPublicKey: 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDPQDwHaxarACZ4QcMKhOwMcEGuW47mo2/WEhU73y4WQ'
+  IncludePublicOutputs: 'false'
+  InstanceType: 't3.micro'

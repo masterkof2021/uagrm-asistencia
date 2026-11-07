@@ -1,0 +1,223 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Stack raiz de asistencia con red, seguridad y tres servidores EC2.
+Metadata:
+  AWSToolsMetrics:
+    AWSAgentToolkit: aws-cloudformation@3
+Parameters:
+  IncludePublicOutputs:
+    Type: String
+    Default: 'false'
+    AllowedValues:
+    - 'false'
+    - 'true'
+    Description: Dejar false si alguna EC2 esta detenida; las salidas PublicIp
+      requieren instancias en ejecucion.
+  OperatorIngressCidrParameter:
+    Type: AWS::SSM::Parameter::Value<String>
+    Description: Nombre del parametro de Systems Manager que contiene la IPv4
+      autorizada con /32.
+  S3PrefixListId:
+    Type: String
+    AllowedPattern: ^pl-[0-9a-f]+$
+    Description: Lista administrada com.amazonaws.us-east-2.s3; resolver en la
+      region antes de desplegar.
+  SshPublicKey:
+    Type: String
+    Description: Contenido de globomatics-ec2.pub; nunca pegar la clave privada.
+    AllowedPattern: ^(ssh-ed25519|ssh-rsa|ecdsa-sha2-\S+) [A-Za-z0-9+/]+={0,2}(
+      .*)?$
+  InstanceType:
+    Type: String
+    Default: t3.micro
+    AllowedValues:
+    - t3.micro
+    Description: Tipo de laboratorio limitado para evitar seleccion accidental
+      costosa.
+  AmazonLinuxAmi:
+    Type: AWS::EC2::Image::Id
+    Description: ID fijo de una AMI Amazon Linux 2023 x86_64 en Ohio.
+Conditions:
+  ShowPublicOutputs:
+    Fn::Equals:
+    - Ref: IncludePublicOutputs
+    - 'true'
+Resources:
+  ResourceGroup:
+    Type: AWS::ResourceGroups::Group
+    Properties:
+      Name:
+        Fn::Sub: ${AWS::StackName}-recursos
+      Description: Recursos exclusivos del laboratorio CloudFormation.
+      ResourceQuery:
+        Type: TAG_FILTERS_1_0
+        Query:
+          ResourceTypeFilters:
+          - AWS::AllSupported
+          TagFilters:
+          - Key: Deployment
+            Values:
+            - Ref: AWS::StackName
+      Tags:
+      - Key: Deployment
+        Value:
+          Ref: AWS::StackName
+  Network:
+    Type: AWS::CloudFormation::Stack
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Gestiona la VPC, su ruta y el registro de trafico rechazado.
+        must:
+        - Usar el nombre raiz para etiquetas y buckets.
+    Properties:
+      TemplateURL:
+        https://s3.us-east-2.amazonaws.com/asistencia-cfn-artifacts-487450071663-us-east-2/asistencia-cfn-tres/16a90f03bcbd77f4bfe7082591dfc7ba.template
+      Parameters:
+        DeploymentName:
+          Ref: AWS::StackName
+  Security:
+    Type: AWS::CloudFormation::Stack
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Define quien se comunica con cada capa de la aplicacion.
+        must:
+        - API desde el cliente
+        - MySQL y SSH de datos desde el backend.
+    Properties:
+      TemplateURL:
+        https://s3.us-east-2.amazonaws.com/asistencia-cfn-artifacts-487450071663-us-east-2/asistencia-cfn-tres/3166d3c4b5cc25ee6a5d74373786d4a7.template
+      Parameters:
+        DeploymentName:
+          Ref: AWS::StackName
+        VpcId:
+          Fn::GetAtt:
+          - Network
+          - Outputs.VpcId
+        SshIngressCidr:
+          Ref: OperatorIngressCidrParameter
+        WebIngressCidr:
+          Ref: OperatorIngressCidrParameter
+        S3PrefixListId:
+          Ref: S3PrefixListId
+  Compute:
+    Type: AWS::CloudFormation::Stack
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Instancia los tres servidores despues de configurar la red y sus
+          reglas.
+        must:
+        - Usar grupos de seguridad distintos y preservar la instancia de datos.
+    Properties:
+      TemplateURL:
+        https://s3.us-east-2.amazonaws.com/asistencia-cfn-artifacts-487450071663-us-east-2/asistencia-cfn-tres/48909f2f51da75286a979ab6f9c63353.template
+      Parameters:
+        DeploymentName:
+          Ref: AWS::StackName
+        SubnetId:
+          Fn::GetAtt:
+          - Network
+          - Outputs.PublicSubnetId
+        ClientSecurityGroupId:
+          Fn::GetAtt:
+          - Security
+          - Outputs.ClientSecurityGroupId
+        BackendSecurityGroupId:
+          Fn::GetAtt:
+          - Security
+          - Outputs.BackendSecurityGroupId
+        DatabaseSecurityGroupId:
+          Fn::GetAtt:
+          - Security
+          - Outputs.DatabaseSecurityGroupId
+        IncludePublicOutputs:
+          Ref: IncludePublicOutputs
+        SshPublicKey:
+          Ref: SshPublicKey
+        InstanceType:
+          Ref: InstanceType
+        ImageId:
+          Ref: AmazonLinuxAmi
+Outputs:
+  VpcId:
+    Description: Red exclusiva de este stack, distinta de la administrada por
+      Pulumi.
+    Value:
+      Fn::GetAtt:
+      - Network
+      - Outputs.VpcId
+  ClientInstanceId:
+    Description: Instancia cliente; utilizar para iniciar o detener el
+      laboratorio.
+    Value:
+      Fn::GetAtt:
+      - Compute
+      - Outputs.ClientInstanceId
+  BackendInstanceId:
+    Description: Instancia backend; ejecuta Node.js.
+    Value:
+      Fn::GetAtt:
+      - Compute
+      - Outputs.BackendInstanceId
+  ClientPublicIp:
+    Condition: ShowPublicOutputs
+    Description: IP dinamica del cliente; consultar de nuevo tras detener e
+      iniciar.
+    Value:
+      Fn::GetAtt:
+      - Compute
+      - Outputs.ClientPublicIp
+  BackendPublicIp:
+    Condition: ShowPublicOutputs
+    Description: IP dinamica del backend; consultar de nuevo tras detener e
+      iniciar.
+    Value:
+      Fn::GetAtt:
+      - Compute
+      - Outputs.BackendPublicIp
+  ClientPrivateIp:
+    Description: Direccion privada del cliente Nginx.
+    Value:
+      Fn::GetAtt:
+      - Compute
+      - Outputs.ClientPrivateIp
+  BackendPrivateIp:
+    Description: Destino de proxy_pass de Nginx, puerto 8090.
+    Value:
+      Fn::GetAtt:
+      - Compute
+      - Outputs.BackendPrivateIp
+  FrontendUrl:
+    Condition: ShowPublicOutputs
+    Description: Disponible despues de instalar Nginx y la aplicacion
+      manualmente.
+    Value:
+      Fn::GetAtt:
+      - Compute
+      - Outputs.FrontendUrl
+  ClientSsh:
+    Condition: ShowPublicOutputs
+    Description: Comando desde el PC que conserva la clave privada
+      correspondiente.
+    Value:
+      Fn::GetAtt:
+      - Compute
+      - Outputs.ClientSsh
+  BackendSsh:
+    Condition: ShowPublicOutputs
+    Description: Comando desde el PC que conserva la clave privada
+      correspondiente.
+    Value:
+      Fn::GetAtt:
+      - Compute
+      - Outputs.BackendSsh
+  DatabaseInstanceId:
+    Description: Instancia de datos con politica de retencion.
+    Value:
+      Fn::GetAtt:
+      - Compute
+      - Outputs.DatabaseInstanceId
+  DatabasePrivateIp:
+    Description: Destino DB_HOST de la API.
+    Value:
+      Fn::GetAtt:
+      - Compute
+      - Outputs.DatabasePrivateIp

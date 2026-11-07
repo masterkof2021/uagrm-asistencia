@@ -1,0 +1,341 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Grupos de seguridad y listas de salida autorizadas para tres servidores.
+Metadata:
+  AWSToolsMetrics:
+    AWSAgentToolkit: aws-cloudformation@3
+Parameters:
+  DeploymentName:
+    Type: String
+    Description: Nombre del stack raiz para nombres y etiquetas comunes.
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+  SshIngressCidr:
+    Type: String
+    Description: IPv4 publica de tu PC con /32. No se admite acceso SSH global.
+    AllowedPattern: '^(?:(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])\.){3}(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])/32$'
+    ConstraintDescription: Introducir una IPv4 valida con mascara /32.
+  WebIngressCidr:
+    Type: String
+    Description: IPv4 publica autorizada para la demostracion web, con /32.
+    AllowedPattern: '^(?:(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])\.){3}(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])/32$'
+    ConstraintDescription: Introducir una IPv4 valida con mascara /32.
+  S3PrefixListId:
+    Type: String
+    AllowedPattern: "^pl-[0-9a-f]+$"
+    Description: Lista administrada com.amazonaws.us-east-2.s3; resolver en la region antes de desplegar.
+Resources:
+  ClientSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Web y SSH limitados a las IP administrativas del laboratorio.
+      VpcId: !Ref VpcId
+      SecurityGroupEgress:
+        - IpProtocol: '-1'
+          CidrIp: 127.0.0.1/32
+          Description: Regla inicial sin salida externa; las reglas reales son independientes.
+      Tags:
+        - {Key: Deployment, Value: !Ref DeploymentName}
+  BackendSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: API solo desde cliente; SSH administrativo; salida MySQL solo a la EC2 de datos.
+      VpcId: !Ref VpcId
+      SecurityGroupEgress:
+        - IpProtocol: '-1'
+          CidrIp: 127.0.0.1/32
+          Description: Evita la regla de salida global implicita de EC2.
+      Tags:
+        - {Key: Deployment, Value: !Ref DeploymentName}
+  ClientSsh:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !GetAtt ClientSecurityGroup.GroupId
+      IpProtocol: tcp
+      FromPort: 22
+      ToPort: 22
+      CidrIp: !Ref SshIngressCidr
+      Description: SSH solo desde la IPv4 /32 autorizada.
+  BackendSsh:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !GetAtt BackendSecurityGroup.GroupId
+      IpProtocol: tcp
+      FromPort: 22
+      ToPort: 22
+      CidrIp: !Ref SshIngressCidr
+      Description: SSH solo desde la IPv4 /32 autorizada.
+  ClientHttp:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !GetAtt ClientSecurityGroup.GroupId
+      IpProtocol: tcp
+      FromPort: 80
+      ToPort: 80
+      CidrIp: !Ref WebIngressCidr
+      Description: HTTP de demostracion solo desde la IPv4 /32 autorizada.
+  ClientHttps:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !GetAtt ClientSecurityGroup.GroupId
+      IpProtocol: tcp
+      FromPort: 443
+      ToPort: 443
+      CidrIp: !Ref WebIngressCidr
+      Description: Reserva HTTPS; abrir el puerto no instala un certificado.
+  BackendApi:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !GetAtt BackendSecurityGroup.GroupId
+      SourceSecurityGroupId: !GetAtt ClientSecurityGroup.GroupId
+      IpProtocol: tcp
+      FromPort: 8090
+      ToPort: 8090
+      Description: API privada solo desde el grupo del cliente.
+  ApprovedDownloads:
+    Type: AWS::EC2::PrefixList
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Instantanea DNS de npm y MySQL; revisar y renovar con scripts/refresh-egress.py.
+        must: [Solo IPv4 /32; maximo 20 destinos; no garantiza filtrado por dominio en CDN compartidas.]
+    Properties:
+      AddressFamily: IPv4
+      MaxEntries: 20
+      PrefixListName: !Sub '${DeploymentName}-downloads'
+      # BEGIN APPROVED DOWNLOAD IPV4
+      Entries:
+        - Cidr: 23.60.130.135/32
+          Description: repo.mysql.com
+        - Cidr: 23.202.26.152/32
+          Description: repo.mysql.com
+        - Cidr: 23.218.14.236/32
+          Description: repo.mysql.com
+        - Cidr: 104.16.0.34/32
+          Description: registry.npmjs.org
+        - Cidr: 104.16.1.34/32
+          Description: registry.npmjs.org
+        - Cidr: 104.16.2.34/32
+          Description: registry.npmjs.org
+        - Cidr: 104.16.3.34/32
+          Description: registry.npmjs.org
+        - Cidr: 104.16.4.34/32
+          Description: registry.npmjs.org
+        - Cidr: 104.16.5.34/32
+          Description: registry.npmjs.org
+        - Cidr: 104.16.6.34/32
+          Description: registry.npmjs.org
+        - Cidr: 104.16.7.34/32
+          Description: registry.npmjs.org
+        - Cidr: 104.16.8.34/32
+          Description: registry.npmjs.org
+        - Cidr: 104.16.9.34/32
+          Description: registry.npmjs.org
+        - Cidr: 104.16.10.34/32
+          Description: registry.npmjs.org
+        - Cidr: 104.16.11.34/32
+          Description: registry.npmjs.org
+      # END APPROVED DOWNLOAD IPV4
+      Tags:
+        - {Key: Deployment, Value: !Ref DeploymentName}
+  ClientHttpOutbound:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId: !GetAtt ClientSecurityGroup.GroupId
+      IpProtocol: tcp
+      FromPort: 80
+      ToPort: 80
+      DestinationPrefixListId: !Ref ApprovedDownloads
+      Description: HTTP solo a destinos autorizados de npm y MySQL.
+  ClientHttpsOutbound:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId: !GetAtt ClientSecurityGroup.GroupId
+      IpProtocol: tcp
+      FromPort: 443
+      ToPort: 443
+      DestinationPrefixListId: !Ref ApprovedDownloads
+      Description: HTTPS solo a destinos autorizados de npm y MySQL.
+  ClientApiOutbound:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId: !GetAtt ClientSecurityGroup.GroupId
+      DestinationSecurityGroupId: !GetAtt BackendSecurityGroup.GroupId
+      IpProtocol: tcp
+      FromPort: 8090
+      ToPort: 8090
+      Description: API privada del backend.
+  BackendHttpOutbound:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId: !GetAtt BackendSecurityGroup.GroupId
+      IpProtocol: tcp
+      FromPort: 80
+      ToPort: 80
+      DestinationPrefixListId: !Ref ApprovedDownloads
+      Description: HTTP solo a destinos autorizados de npm y MySQL.
+  BackendHttpsOutbound:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId: !GetAtt BackendSecurityGroup.GroupId
+      IpProtocol: tcp
+      FromPort: 443
+      ToPort: 443
+      DestinationPrefixListId: !Ref ApprovedDownloads
+      Description: HTTPS solo a destinos autorizados de npm y MySQL.
+  ClientS3Outbound80:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId: !GetAtt ClientSecurityGroup.GroupId
+      DestinationPrefixListId: !Ref S3PrefixListId
+      IpProtocol: tcp
+      FromPort: 80
+      ToPort: 80
+      Description: Repositorios Amazon Linux alojados en S3 regional.
+  ClientS3Outbound443:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId: !GetAtt ClientSecurityGroup.GroupId
+      DestinationPrefixListId: !Ref S3PrefixListId
+      IpProtocol: tcp
+      FromPort: 443
+      ToPort: 443
+      Description: Repositorios Amazon Linux alojados en S3 regional.
+  BackendS3Outbound80:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId: !GetAtt BackendSecurityGroup.GroupId
+      DestinationPrefixListId: !Ref S3PrefixListId
+      IpProtocol: tcp
+      FromPort: 80
+      ToPort: 80
+      Description: Repositorios Amazon Linux alojados en S3 regional.
+  BackendS3Outbound443:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId: !GetAtt BackendSecurityGroup.GroupId
+      DestinationPrefixListId: !Ref S3PrefixListId
+      IpProtocol: tcp
+      FromPort: 443
+      ToPort: 443
+      Description: Repositorios Amazon Linux alojados en S3 regional.
+  DatabaseSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Separa la base de datos y su administracion del acceso web.
+        must: [Solo el backend puede iniciar conexiones SSH y MySQL.]
+    Properties:
+      GroupDescription: MySQL y SSH exclusivamente desde el grupo del backend.
+      VpcId: !Ref VpcId
+      SecurityGroupEgress:
+        - IpProtocol: '-1'
+          CidrIp: 127.0.0.1/32
+          Description: Evita la regla de salida global implicita de EC2.
+      Tags:
+        - {Key: Deployment, Value: !Ref DeploymentName}
+  DatabaseSsh:
+    Type: AWS::EC2::SecurityGroupIngress
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Acceso Ssh privado desde la instancia backend.
+        must: [El origen debe ser el grupo del backend.]
+    Properties:
+      GroupId: !GetAtt DatabaseSecurityGroup.GroupId
+      SourceSecurityGroupId: !GetAtt BackendSecurityGroup.GroupId
+      IpProtocol: tcp
+      FromPort: 22
+      ToPort: 22
+  BackendSshToDatabase:
+    Type: AWS::EC2::SecurityGroupEgress
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Permite al backend iniciar Ssh hacia la base de datos.
+        must: [El destino debe ser el grupo de la base de datos.]
+    Properties:
+      GroupId: !GetAtt BackendSecurityGroup.GroupId
+      DestinationSecurityGroupId: !GetAtt DatabaseSecurityGroup.GroupId
+      IpProtocol: tcp
+      FromPort: 22
+      ToPort: 22
+  DatabaseMysql:
+    Type: AWS::EC2::SecurityGroupIngress
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Acceso Mysql privado desde la instancia backend.
+        must: [El origen debe ser el grupo del backend.]
+    Properties:
+      GroupId: !GetAtt DatabaseSecurityGroup.GroupId
+      SourceSecurityGroupId: !GetAtt BackendSecurityGroup.GroupId
+      IpProtocol: tcp
+      FromPort: 3306
+      ToPort: 3306
+  BackendMysqlToDatabase:
+    Type: AWS::EC2::SecurityGroupEgress
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Permite al backend iniciar Mysql hacia la base de datos.
+        must: [El destino debe ser el grupo de la base de datos.]
+    Properties:
+      GroupId: !GetAtt BackendSecurityGroup.GroupId
+      DestinationSecurityGroupId: !GetAtt DatabaseSecurityGroup.GroupId
+      IpProtocol: tcp
+      FromPort: 3306
+      ToPort: 3306
+  DatabaseHttpOutbound:
+    Type: AWS::EC2::SecurityGroupEgress
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Permite instalar y actualizar paquetes de la EC2 de datos.
+        must: [Solo prefijos autorizados.]
+    Properties:
+      GroupId: !GetAtt DatabaseSecurityGroup.GroupId
+      IpProtocol: tcp
+      FromPort: 80
+      ToPort: 80
+      DestinationPrefixListId: !Ref ApprovedDownloads
+      Description: HTTP solo a destinos autorizados de npm y MySQL.
+  DatabaseHttpsOutbound:
+    Type: AWS::EC2::SecurityGroupEgress
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Permite instalar y actualizar paquetes de la EC2 de datos.
+        must: [Solo prefijos autorizados.]
+    Properties:
+      GroupId: !GetAtt DatabaseSecurityGroup.GroupId
+      IpProtocol: tcp
+      FromPort: 443
+      ToPort: 443
+      DestinationPrefixListId: !Ref ApprovedDownloads
+      Description: HTTPS solo a destinos autorizados de npm y MySQL.
+  DatabaseS3Outbound80:
+    Type: AWS::EC2::SecurityGroupEgress
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Permite instalar y actualizar paquetes de la EC2 de datos.
+        must: [Solo prefijos autorizados.]
+    Properties:
+      GroupId: !GetAtt DatabaseSecurityGroup.GroupId
+      DestinationPrefixListId: !Ref S3PrefixListId
+      IpProtocol: tcp
+      FromPort: 80
+      ToPort: 80
+      Description: Repositorios Amazon Linux alojados en S3 regional.
+  DatabaseS3Outbound443:
+    Type: AWS::EC2::SecurityGroupEgress
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Permite instalar y actualizar paquetes de la EC2 de datos.
+        must: [Solo prefijos autorizados.]
+    Properties:
+      GroupId: !GetAtt DatabaseSecurityGroup.GroupId
+      DestinationPrefixListId: !Ref S3PrefixListId
+      IpProtocol: tcp
+      FromPort: 443
+      ToPort: 443
+      Description: Repositorios Amazon Linux alojados en S3 regional.
+Outputs:
+  ClientSecurityGroupId:
+    Value: !GetAtt ClientSecurityGroup.GroupId
+  BackendSecurityGroupId:
+    Value: !GetAtt BackendSecurityGroup.GroupId
+  DatabaseSecurityGroupId:
+    Value: !GetAtt DatabaseSecurityGroup.GroupId

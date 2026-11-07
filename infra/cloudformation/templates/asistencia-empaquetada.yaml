@@ -108,7 +108,7 @@ Resources:
         - Usar grupos de seguridad distintos y preservar la instancia de datos.
     Properties:
       TemplateURL:
-        https://s3.us-east-2.amazonaws.com/asistencia-cfn-artifacts-487450071663-us-east-2/asistencia-cfn-tres/48909f2f51da75286a979ab6f9c63353.template
+        https://s3.us-east-2.amazonaws.com/asistencia-cfn-artifacts-487450071663-us-east-2/asistencia-cfn-tres/68e2712efe7fb6abd6a787874a729501.template
       Parameters:
         DeploymentName:
           Ref: AWS::StackName

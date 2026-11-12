@@ -1,15 +1,16 @@
-# Dependencias, temporales y resultados de pruebas
 node_modules/
-tmp/
 coverage/
-
-# Credenciales y configuración local; conservar las plantillas
-.aws/
+tmp/
 .env
 .env.*
 !.env.example
 !.env.*.example
-
-# Claves SSH locales: nunca forman parte del repositorio
-github.key
-github.key.pub
+.aws/
+.pulumi/
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+*.pem
+*.key
+*_credentials.csv

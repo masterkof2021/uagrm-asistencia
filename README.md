@@ -15,6 +15,9 @@ Plataforma para aprovisionar y administrar instancias aisladas de UAGRM Asistenc
 | [Requisitos](documentacion/requisitos.md) | Alcance vigente, criterios de demostración y aclaraciones del docente. |
 | [Plan de cierre](documentacion/plan-de-cierre.md) | Pasos para integrar la AMI, Ansible y los escáneres, validar la demo y preparar la entrega. |
 | [Manual de reproducción](documentacion/manual-reproduccion-ia.md) | Instrucciones para reproducir la versión probada del proyecto. |
+| [Guía del panel](documentacion/guia-operar-panel.md) | Registro, despliegue, acceso, suspensión y retiro de instituciones. |
+| [Guion de grabación](documentacion/guion-demo-final.md) | Secuencia de 14 minutos y pasos para la entrega del equipo. |
+| [Presentación](documentacion/presentacion-proyecto-final-modulo-2.pptx) | Arquitectura y resultados de los ensayos en AWS. |
 | [Revisión de AWS](documentacion/aws-inventario-y-costos.md) | Inventario de Ohio, estimación de almacenamiento y candidatos para retirar. Contiene identificadores de recursos de la cuenta. |
 | [Preparación de AWS](documentacion/aws-preparacion-demo.md) | Presupuesto de la demo, permisos requeridos y comprobaciones de la cuenta. |
 | [Demo de aislamiento](documentacion/demo-aislamiento.md) | Demostración con dos planes, datos ficticios, persistencia y monitoreo. |

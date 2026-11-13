@@ -67,3 +67,18 @@ Cada institución importó su lista y sus fechas desde Excel y activó su propio
 A las 14:33:46, Grafana consultó seis series de disponibilidad de Nginx, la API y MySQL de ambos tenants en Prometheus. La prueba de activación y resolución de alertas se documentó en el [ensayo de observabilidad](aws-preparacion-demo.md#prueba-de-observabilidad).
 
 AWS confirmó el retiro de los 31 recursos de OpenTofu y los tres discos raíz por tenant. Una comprobación posterior devolvió cero VPC, EC2 activas, volúmenes EBS y parámetros de arranque de la demo. Ohio volvió a siete VPC de las nueve permitidas.
+
+## Prueba simultánea de las URLs del 13 de noviembre de 2026
+
+El panel autenticado desplegó dos instituciones de prueba en Ohio mediante OpenTofu. Ambas usaron la AMI de Packer `ami-07277c62be0b7d88f` y arranque con Ansible. AWS reportó seis EC2 en ejecución, tres en cada VPC. En ambos despliegues, Trivy registró tres hallazgos de configuración y Gitleaks y Conftest terminaron sin hallazgos.
+
+Con los dos túneles de Session Manager abiertos a la vez, se comprobó el sitio y la API de cada institución a través de Nginx.
+
+| Institución | URL local | Página inicial | API con origen propio | API con origen de la otra institución | API sin sesión |
+| --- | --- | --- | --- | --- | --- |
+| Básica | `http://127.0.0.1:8081` | 200 | 204 | 403 | 401 |
+| Estándar | `http://127.0.0.1:8082` | 200 | 204 | 403 | 401 |
+
+Las columnas de origen corresponden a solicitudes `OPTIONS /api/me`. La columna sin sesión corresponde a `GET /api/me`. Las pruebas con matrículas, Excel, suspensión y Grafana corresponden al ensayo del 12 de noviembre.
+
+El panel verificó los tres discos raíz de cada institución antes de confirmar el retiro. Después, AWS reportó cero EC2 activas, discos EBS, VPC, parámetros de arranque y túneles asociados al ensayo. Ohio volvió a siete de nueve VPC y la AMI siguió disponible para reproducir la prueba.

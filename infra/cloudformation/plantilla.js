@@ -74,7 +74,7 @@ export async function generarPlantilla(tenant, { ami, discoRaiz, limite, ansible
   }
 
   const scripts = await scriptsArranque(prefijo,
-    'aws secretsmanager get-secret-value --region us-east-2 --query SecretString --output text --secret-id "$parameter_prefix/$1"', ansible);
+    'aws secretsmanager get-secret-value --region us-east-2 --query SecretString --output text --secret-id "$parameter_prefix/$1"', ansible, tenant.puerto_local);
   const salidas = { VpcId: { Value: ref('Red') }, AppCommit: { Value: appCommit } };
   for (const [rol, datos] of Object.entries(capas)) {
     const id = capital(rol);

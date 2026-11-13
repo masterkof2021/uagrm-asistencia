@@ -8,10 +8,14 @@ export const capas = {
 };
 const inicio = new URL('./opentofu/cloud-init/', import.meta.url);
 
-export async function scriptsArranque(prefijo, comandoSecretos, ansible = false) {
+export function origenLocal(puerto = null) {
+  return `http://127.0.0.1:${puerto ?? 8080}`;
+}
+
+export async function scriptsArranque(prefijo, comandoSecretos, ansible = false, puerto = null) {
   const variables = {
     app_commit: appCommit, parameter_prefix: prefijo, frontend_ip: capas.frontend.ip, backend_ip: capas.backend.ip,
-    database_ip: capas.database.ip, web_origin: 'http://127.0.0.1:8080', read_secret_command: comandoSecretos,
+    database_ip: capas.database.ip, web_origin: origenLocal(puerto), read_secret_command: comandoSecretos,
   };
   const comun = (await readFile(new URL('common.sh.tftpl', inicio), 'utf8'))
     .replace(/\$\{([a-z_]+)\}/g, (_, campo) => {

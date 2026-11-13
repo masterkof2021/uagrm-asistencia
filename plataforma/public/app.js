@@ -130,6 +130,25 @@ function filaTenant(tenant) {
   historial.type = 'button';
   historial.addEventListener('click', () => mostrarHistorial(tenant));
   accion.append(historial);
+  if (tenant.puerto_local) {
+    const url = `http://127.0.0.1:${tenant.puerto_local}`;
+    if (tenant.estado === 'listo' && /^i-[a-f0-9]{8}(?:[a-f0-9]{9})?$/.test(tenant.frontend_id ?? '')) {
+      const acceso = nodo('details');
+      acceso.append(nodo('summary', 'Acceso por Systems Manager'));
+      const enlace = nodo('a', url);
+      enlace.href = url;
+      enlace.target = '_blank';
+      enlace.rel = 'noopener noreferrer';
+      const comando = nodo('code', `aws ssm start-session --region us-east-2 --target ${tenant.frontend_id} --document-name AWS-StartPortForwardingSession --parameters 'portNumber=80,localPortNumber=${tenant.puerto_local}'`);
+      acceso.append(nodo('small', 'Ejecuta el comando con tu perfil de AWS autorizado y deja abierta la terminal.'));
+      const instrucciones = nodo('small');
+      instrucciones.append(comando);
+      acceso.append(instrucciones, enlace);
+      accion.append(acceso);
+    } else {
+      accion.append(nodo('small', url));
+    }
+  }
   fila.append(
     institucion,
     nodo('td', tenant.plan.nombre),

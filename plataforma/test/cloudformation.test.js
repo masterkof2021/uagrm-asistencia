@@ -11,7 +11,7 @@ const huella = 'a'.repeat(64);
 const Tags = [...etiquetasPila(tenant), { Key: 'TemplateDigest', Value: huella }];
 
 test('la plantilla aplica el catálogo y el aislamiento de las tres capas', async () => {
-  const plantilla = await generarPlantilla(tenant, {
+  const plantilla = await generarPlantilla({ ...tenant, puerto_local: 8082 }, {
     ami: 'ami-00000000000000000', discoRaiz: '/dev/xvda', limite: 'limite-del-proyecto',
   });
   const { Resources: recursos } = plantilla;
@@ -24,6 +24,7 @@ test('la plantilla aplica el catálogo y el aislamiento de las tres capas', asyn
   assert.deepEqual(recursos.EntradaBackend.Properties.SourceSecurityGroupId, { Ref: 'SeguridadFrontend' });
   assert.equal(recursos.SeguridadFrontend.Properties.SecurityGroupIngress, undefined);
   assert.match(database.Properties.UserData['Fn::Base64'], /secretsmanager get-secret-value/);
+  assert.match(backend.Properties.UserData['Fn::Base64'], /web_origin='http:\/\/127\.0\.0\.1:8082'/);
   assert.equal(recursos.SecretoDb.Properties.GenerateSecretString.PasswordLength, 48);
   assert.equal(recursos.RolDatabase.Properties.PermissionsBoundary, 'limite-del-proyecto');
 });

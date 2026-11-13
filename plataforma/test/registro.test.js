@@ -224,6 +224,9 @@ test('la API encola un despliegue único y permite reintentar sin perder el hist
   assert.deepEqual(historial.map(({ estado }) => estado), ['listo', 'error']);
   assert.deepEqual(historial.map(({ escaneos }) => escaneos[0].estado), ['hallazgos', 'error']);
   assert.equal(historial[0].salida.instancias.frontend, 'i-ejemplo');
+  const [institucion] = await (await pedir(`${url}/api/tenants`)).json();
+  assert.equal(institucion.puerto_local, 8081);
+  assert.equal(institucion.frontend_id, 'i-ejemplo');
   assert.equal((await iniciarDespliegue()).status, 409);
 });
 
@@ -249,6 +252,9 @@ test('conserva los tenants al reabrir SQLite y aplica filtros combinados', async
   try {
     const resultado = await (await pedir(`${url}/api/tenants?buscar=marcos&plan=estandar&entorno=pruebas&estado=registrado`)).json();
     assert.deepEqual(resultado.map(({ identificador }) => identificador), ['san-marcos']);
+    assert.equal(resultado[0].puerto_local, 8081);
+    const todos = await (await pedir(`${url}/api/tenants`)).json();
+    assert.equal(todos.find(({ identificador }) => identificador === 'central').puerto_local, 8082);
     const vacio = await (await pedir(`${url}/api/tenants?buscar=marcos&entorno=produccion`)).json();
     assert.deepEqual(vacio, []);
   } finally {

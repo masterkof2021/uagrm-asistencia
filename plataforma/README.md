@@ -56,6 +56,12 @@ Con los permisos `ec2:StopInstances` y `ec2:StartInstances`, **Suspender** detie
 
 Con `PFM2_MONITORING=1`, la vista **Tenants** muestra las alertas activas y el historial reciente de detecciones y resoluciones, y enlaza al dashboard de Grafana. [Arranque de la observabilidad](../observabilidad/README.md).
 
+## Acceso a cada institución
+
+Al registrar una institución, el panel le reserva un puerto local único y guarda la asignación en SQLite. Los motores configuran la API para aceptar el origen de ese puerto. En una base nueva, los dos primeros enlaces son `http://127.0.0.1:8081` y `http://127.0.0.1:8082`.
+
+En **Tenants → Acceso por Systems Manager**, copia el comando de la institución operativa. Ejecuta cada comando en su propia terminal con el complemento de Session Manager instalado y una identidad AWS autorizada para abrir la sesión. Para seleccionar un perfil específico, añade `--profile <perfil-autorizado>`. Deja ambas terminales abiertas y abre cada enlace en una pestaña. Si suspendes una institución, vuelve a abrir su túnel después de reanudarla. Los registros anteriores conservan su acceso por el puerto 8080. Registra instituciones nuevas para la demostración con enlaces simultáneos. [Reenvío de puertos de AWS](https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-sessions-start.html#sessions-start-port-forwarding).
+
 ## Escaneos antes de desplegar
 
 En Windows, instala los binarios verificados desde la raíz del repositorio con `powershell -File asistencia/infra/cloudformation/scripts/Install-Scanners.ps1`. En Linux, agrega `trivy`, `gitleaks` y `conftest` al PATH. Inicia el panel con `PFM2_ESCANEOS=1` para ejecutar los tres controles antes de aplicar un despliegue nuevo o un reintento.

@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as esperar } from 'node:timers/promises';
 import { generarPlantilla, prefijoSecretos } from '../infra/cloudformation/plantilla.js';
+import { origenLocal } from '../infra/arranque.js';
 import { aprovisionarPila, borrarPila, consultarPila, recursosPila, verificarPila } from './cloudformation.js';
 import { abrirPilaPulumi, huellaPulumi, inventarioPulumi, prepararProgramaPulumi, revisarPreviewPulumi, verificarEntradaPulumi } from './pulumi.js';
 import { escanearDespliegue } from './escaneos.js';
@@ -243,7 +244,7 @@ export async function desplegarHcl({ config, directorio, datosTenant, tenant, pr
   const variables = {
     account_id: config.cuenta, tenant_id: tenant.identificador, environment: tenant.entorno,
     plan: tenant.plan.id, ami_id: ami, permissions_boundary_arn: config.limite, managed_by: nombre,
-    use_ansible: ansible,
+    use_ansible: ansible, web_origin: origenLocal(tenant.puerto_local),
   };
   const clave = claveHcl(tenant);
   await writeFile(join(cwd, 'tenant.tfvars.json'), JSON.stringify(variables));

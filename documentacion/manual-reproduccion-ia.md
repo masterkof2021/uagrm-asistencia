@@ -171,7 +171,7 @@ $cuerpo = @{
 } | ConvertTo-Json -Compress
 
 Invoke-RestMethod "$panel/api/catalogo" -WebSession $sesionPanel
-Invoke-RestMethod "$panel/api/tenants" -Method Post -ContentType 'application/json' -Body $cuerpo -WebSession $sesionPanel
+$institucion = Invoke-RestMethod "$panel/api/tenants" -Method Post -ContentType 'application/json' -Body $cuerpo -WebSession $sesionPanel
 $ruta = "$panel/api/tenants/$tenant"
 $trabajo = Invoke-RestMethod "$ruta/despliegues" -Method Post -WebSession $sesionPanel
 $trabajo | Select-Object id, estado, fase
@@ -202,12 +202,13 @@ Los valores iniciales de `db` y `admin` viven en Parameter Store como `SecureStr
 Obtén el ID de frontend de la salida del trabajo operativo. Con un perfil autorizado y el complemento Session Manager instalado, abre un túnel al puerto remoto 80. Mantén la terminal del túnel abierta durante la prueba.
 
 ```powershell
-$frontend = 'i-REEMPLAZAR'
+$frontend = ($historial | Where-Object estado -eq 'listo' | Select-Object -First 1).salida.instancias.frontend
+$puertoLocal = if ($institucion.puerto_local) { $institucion.puerto_local } else { 8080 }
 $perfilSesion = 'perfil-autorizado-ssm'
-aws ssm start-session --profile $perfilSesion --region us-east-2 --target $frontend --document-name AWS-StartPortForwardingSession --parameters 'portNumber=80,localPortNumber=8080'
+aws ssm start-session --profile $perfilSesion --region us-east-2 --target $frontend --document-name AWS-StartPortForwardingSession --parameters "portNumber=80,localPortNumber=$puertoLocal"
 ```
 
-Abre [la aplicación por el túnel](http://127.0.0.1:8080). El usuario inicial del tenant es `admin`. El operador obtiene su credencial del almacén correspondiente a ese motor, en privado. En **Nuevo módulo**, importa un Excel de estudiantes con encabezados **Número de registro**, **Nombre completo** y **Correo electrónico**. Importa el Excel de fechas con **Fecha**, **Hora inicio** y **Hora fin**. Usa una matrícula ficticia como texto y una fecha de clase del día en Bolivia. Activa el módulo, entra como estudiante, marca asistencia y verifica la exportación administrativa.
+Abre la dirección del panel para esa institución, por ejemplo `http://127.0.0.1:8081`. Para abrir otra a la vez, usa el puerto asignado a la segunda en otra terminal. El usuario inicial del tenant es `admin`. El operador obtiene su credencial del almacén correspondiente a ese motor, en privado. En **Nuevo módulo**, importa un Excel de estudiantes con encabezados **Número de registro**, **Nombre completo** y **Correo electrónico**. Importa el Excel de fechas con **Fecha**, **Hora inicio** y **Hora fin**. Usa una matrícula ficticia como texto y una fecha de clase del día en Bolivia. Activa el módulo, entra como estudiante, marca asistencia y verifica la exportación administrativa.
 
 En una misma sesión administrativa del panel, verifica estas operaciones. Cada POST asíncrono devuelve el trabajo a consultar por `GET /despliegues`.
 
@@ -300,6 +301,6 @@ El panel consulta Prometheus cada 15 s. `GET /api/alertas` devuelve las alertas 
 | Espera de SSM o arranque incompleto | Verifica los ID del historial, el agente y `cloud-init status --wait` en cada EC2 autorizada. Revisa `/var/log/cloud-init-output.log` en la capa afectada. Comprueba MySQL, luego `asistencia` y por último Nginx. |
 | Bloqueo S3 o cambio inesperado en el plan | Identifica el trabajo activo y conserva el estado original. Revisa el intento y la revisión. Cuando termine la operación activa, reintenta sobre el mismo tenant. |
 | Pulumi indica que falta `clave.local` o que las dependencias difieren | Recupera el directorio original del tenant y los paquetes que coincidan con su lockfile. La clave de otro tenant no abre la pila original. |
-| La página abre pero las solicitudes del navegador fallan | Comprueba el túnel a la EC2 frontend del tenant correcto, el origen `http://127.0.0.1:8080` y que `/api/me` responda `401` sin sesión. Alterna los túneles en el puerto 8080 si estás mostrando ambos tenants. |
+| La página abre pero las solicitudes del navegador fallan | Comprueba el túnel a la EC2 frontend del tenant correcto, el puerto reservado para la institución y que `/api/me` responda `401` sin sesión. Abre un túnel por institución con el puerto que indica el panel. |
 | El tablero aparece vacío | Comprueba el flag `PFM2_MONITORING`, el objetivo de Prometheus, el datasource y los filtros. Espera un ciclo de sondeo de un tenant operativo. |
 | El retiro queda pendiente o en error | Consulta el último trabajo, confirma el inventario y verifica la cuenta y la clave de estado o ARN de pila. Prepara una revisión nueva si cambió el estado. Antes de declarar completado el retiro, contrasta con AWS los ID y etiquetas de la prueba. |

@@ -95,16 +95,26 @@ export function abrirRegistro(ruta) {
     if (!columnas.some(({ name }) => name === 'escaneos')) {
       db.exec('ALTER TABLE despliegues ADD COLUMN escaneos TEXT');
     }
+    if (!db.prepare("PRAGMA table_info(tenants)").all().some(({ name }) => name === 'puerto_local')) {
+      db.exec('ALTER TABLE tenants ADD COLUMN puerto_local INTEGER CHECK (puerto_local BETWEEN 8081 AND 65535)');
+    }
+    db.exec('CREATE UNIQUE INDEX IF NOT EXISTS puerto_local_por_tenant ON tenants(puerto_local)');
   });
 
   const insertar = db.prepare(`
-    INSERT INTO tenants (identificador, nombre, correo, entorno, plan_id, plan, motor, region, creado)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO tenants (identificador, nombre, correo, entorno, plan_id, plan, motor, region, creado, puerto_local)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(identificador) DO NOTHING
-    RETURNING identificador, nombre, correo, entorno, plan, motor, region, estado, creado
+    RETURNING identificador, nombre, correo, entorno, plan, motor, region, estado, creado, puerto_local
   `);
+  const siguientePuerto = db.prepare('SELECT COALESCE(MAX(puerto_local), 8080) + 1 AS puerto FROM tenants');
   const listar = db.prepare(`
-    SELECT t.*, d.fase AS fase_despliegue, d.tipo AS tipo_despliegue
+    SELECT t.*, d.fase AS fase_despliegue, d.tipo AS tipo_despliegue,
+      CASE WHEN t.estado = 'listo' THEN (
+        SELECT json_extract(salida, '$.instancias.frontend') FROM despliegues
+        WHERE tenant_id = t.identificador AND tipo = 'desplegar' AND estado = 'listo'
+        ORDER BY id DESC LIMIT 1
+      ) END AS frontend_id
     FROM tenants t
     LEFT JOIN despliegues d ON d.id = (
       SELECT id FROM despliegues WHERE tenant_id = t.identificador ORDER BY id DESC LIMIT 1
@@ -202,8 +212,10 @@ export function abrirRegistro(ruta) {
     crear({ identificador, nombre, correo, entorno, motor, plan }, operador) {
       return transaccion(() => {
         const ahora = fecha();
+        const { puerto } = siguientePuerto.get();
+        if (puerto > 65535) throw new Error('Se agotaron los puertos locales del panel.');
         const fila = insertar.get(identificador, nombre, correo, entorno, plan.id, JSON.stringify(plan),
-          motor, catalogo.region, ahora);
+          motor, catalogo.region, ahora, puerto);
         if (fila && operador) registrarAuditoria.run(identificador, operador, 'registrar', null, ahora);
         return fila ? leerTenant(fila) : null;
       });

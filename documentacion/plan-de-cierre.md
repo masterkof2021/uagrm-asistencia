@@ -36,7 +36,7 @@ El proyecto ya tiene código y presentación en GitHub. Se ensayó en AWS Ohio e
 ## 5. Cerrar el acceso y la auditoría del panel
 
 - El panel local ya autentica al administrador y registra al operador que solicita cada operación. [Configuración y auditoría](../plataforma/README.md#ejecutar-en-local).
-- Verificar si el docente acepta el acceso actual por Systems Manager. Si exige una URL directa, probar una URL distinta por tenant con acceso controlado al frontend y actualizarla al reanudar si cambia la dirección. Mantener la API y MySQL accesibles únicamente desde sus capas autorizadas.
+- Abrir una URL local distinta por institución mediante dos túneles simultáneos de Systems Manager. El panel reserva el puerto y muestra el comando y el enlace de cada frontend. Validar ambas direcciones durante el ensayo final. [Acceso a cada institución](../plataforma/README.md#acceso-a-cada-institución).
 
 **Cierre del paso.** El operador abre la aplicación correcta desde el panel o con el acceso documentado, y el historial permite saber quién inició cada operación nueva.
 

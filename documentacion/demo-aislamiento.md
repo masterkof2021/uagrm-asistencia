@@ -42,7 +42,7 @@ sequenceDiagram
 1. Confirma dos cupos libres en la cuota **VPCs per Region** de Ohio.
 2. Inicia el [panel con el perfil de despliegue](../plataforma/README.md#despliegue-desde-el-panel) y la [observabilidad local](../observabilidad/README.md#arranque-local-en-windows).
 3. Registra dos instituciones ficticias en **Pruebas**, una con cada plan. Despliega ambas y espera a que aparezcan como **Operativo**.
-4. Para abrir cada aplicación, usa el [túnel de Systems Manager](../infra/opentofu/README.md) hacia su EC2 de frontend. Si alternas ambos túneles en el puerto local `8080`, cierra la sesión del navegador y el túnel al cambiar de institución. Las seis EC2 pueden permanecer en ejecución mientras alternas.
+4. En **Tenants → Acceso por Systems Manager**, abre el túnel de cada institución en una terminal distinta con un perfil de AWS autorizado. Mantén los dos túneles abiertos y abre los dos enlaces del panel en pestañas separadas. Los primeros tenants de una base nueva reciben `http://127.0.0.1:8081` y `http://127.0.0.1:8082`. Usa los puertos que indique tu panel. [Acceso desde el panel](../plataforma/README.md#acceso-a-cada-institución).
 
 ## Mostrar el aislamiento
 

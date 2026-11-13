@@ -66,7 +66,7 @@ export async function prepararProgramaPulumi(datosTenant, tenant, { ami, cuenta,
   await verificarDependencias(cwd, dependencias);
   const prefijo = `/asistencia/proyecto-final-modulo-2/${tenant.identificador}/pulumi`;
   const scripts = await scriptsArranque(prefijo,
-    'aws ssm get-parameter --region us-east-2 --with-decryption --name "$parameter_prefix/$1" --query Parameter.Value --output text', ansible);
+    'aws ssm get-parameter --region us-east-2 --with-decryption --name "$parameter_prefix/$1" --query Parameter.Value --output text', ansible, tenant.puerto_local);
   const servidores = Object.fromEntries(Object.entries(capas).map(([rol, { nombre, ip }]) => {
     const recurso = tenant.plan.recursos.find((recurso) => recurso.rol === nombre);
     if (!recurso) throw new Error('Falta una capa en el plan del tenant.');

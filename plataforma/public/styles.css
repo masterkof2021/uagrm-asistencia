@@ -164,6 +164,10 @@ table { width: 100%; border-collapse: collapse; text-align: left; font-size: 14p
 th, td { border-bottom: 1px solid var(--borde); padding: 11px 9px; }
 th { background: #f2f6fa; font-size: 12px; color: var(--suave); }
 td small { display: block; color: var(--suave); margin-top: 3px; }
+td details { margin-top: 8px; }
+td details summary { cursor: pointer; }
+td details code { overflow-wrap: anywhere; }
+td details a { color: var(--azul); text-decoration: underline; }
 .etiqueta { border-radius: 15px; background: #e9f4ff; color: #164a76; padding: 4px 8px; font-size: 12px; }
 
 @media (max-width: 1150px) {

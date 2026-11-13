@@ -1,0 +1,16 @@
+- name: Configurar MySQL
+  hosts: localhost
+  gather_facts: false
+  vars:
+    ansible_python_interpreter: /opt/pfm2/ansible/bin/python
+  tasks:
+    - name: Inicializar MySQL y la cuenta de la aplicación
+      ansible.builtin.command: /bin/bash /etc/pfm2/capa.sh
+      args:
+        creates: /root/.my.cnf
+      no_log: true
+    - name: Habilitar MySQL
+      ansible.builtin.systemd_service:
+        name: mysqld
+        enabled: true
+        state: started

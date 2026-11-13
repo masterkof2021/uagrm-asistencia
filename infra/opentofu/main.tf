@@ -242,7 +242,19 @@ resource "aws_instance" "server" {
       EOT
       )
     }),
-    file("${path.module}/cloud-init/${each.key}.sh"),
+    var.use_ansible ? join("\n", concat(
+      each.key == "frontend" ? [] : [
+        trimspace(file("${path.module}/cloud-init/capa.sh")),
+        trimspace(file("${path.module}/cloud-init/${each.key}.sh")),
+        "PFM2_CAPA",
+      ],
+      [
+        "pfm2_rol=${each.key}",
+        trimspace(file("${path.module}/cloud-init/ansible.sh")),
+        trimspace(file("${path.module}/cloud-init/${each.key}.yml")),
+        file("${path.module}/cloud-init/ejecutar-ansible.sh"),
+      ],
+    )) : file("${path.module}/cloud-init/${each.key}.sh"),
   ]), "\r\n", "\n")
 
   credit_specification {

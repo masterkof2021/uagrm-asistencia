@@ -1,0 +1,17 @@
+- name: Configurar la API
+  hosts: localhost
+  gather_facts: false
+  vars:
+    ansible_python_interpreter: /opt/pfm2/ansible/bin/python
+  tasks:
+    - name: Preparar archivos y esquema de asistencia
+      ansible.builtin.command: /bin/bash /etc/pfm2/capa.sh
+      args:
+        creates: /etc/systemd/system/asistencia.service
+      no_log: true
+    - name: Habilitar la API
+      ansible.builtin.systemd_service:
+        name: asistencia
+        daemon_reload: true
+        enabled: true
+        state: started

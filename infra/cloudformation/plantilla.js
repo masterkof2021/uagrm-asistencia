@@ -26,7 +26,7 @@ export function prefijoSecretos(tenant) {
   return `/asistencia/${proyecto}/${tenant}/cloudformation`;
 }
 
-export async function generarPlantilla(tenant, { ami, discoRaiz, limite }) {
+export async function generarPlantilla(tenant, { ami, discoRaiz, limite, ansible }) {
   const nombre = nombrePila(tenant.identificador);
   const prefijo = prefijoSecretos(tenant.identificador);
   const marcas = Object.fromEntries(etiquetasPila(tenant).map(({ Key, Value }) => [Key, Value]));
@@ -74,7 +74,7 @@ export async function generarPlantilla(tenant, { ami, discoRaiz, limite }) {
   }
 
   const scripts = await scriptsArranque(prefijo,
-    'aws secretsmanager get-secret-value --region us-east-2 --query SecretString --output text --secret-id "$parameter_prefix/$1"');
+    'aws secretsmanager get-secret-value --region us-east-2 --query SecretString --output text --secret-id "$parameter_prefix/$1"', ansible);
   const salidas = { VpcId: { Value: ref('Red') }, AppCommit: { Value: appCommit } };
   for (const [rol, datos] of Object.entries(capas)) {
     const id = capital(rol);

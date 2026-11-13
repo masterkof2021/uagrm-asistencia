@@ -1,17 +1,19 @@
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { copyFile, cp, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { copyFile, cp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as esperar } from 'node:timers/promises';
 import { generarPlantilla, prefijoSecretos } from '../infra/cloudformation/plantilla.js';
 import { aprovisionarPila, borrarPila, consultarPila, recursosPila, verificarPila } from './cloudformation.js';
 import { abrirPilaPulumi, huellaPulumi, inventarioPulumi, prepararProgramaPulumi, revisarPreviewPulumi, verificarEntradaPulumi } from './pulumi.js';
+import { escanearDespliegue } from './escaneos.js';
 
 const modulo = fileURLToPath(new URL('../infra/opentofu/', import.meta.url));
 const region = 'us-east-2';
 const ejecutable = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const esperado = ['backend', 'database', 'frontend'];
+const idAmi = /^ami-(?:[0-9a-f]{8}|[0-9a-f]{17})$/;
 const salidaMaxima = 8 * 1024 * 1024;
 const lockTerraform = fileURLToPath(new URL('../infra/terraform/.terraform.lock.hcl', import.meta.url));
 const motorHcl = (motor) => motor === 'terraform' ? 'terraform' : 'tofu';
@@ -21,12 +23,16 @@ const claveHcl = (tenant) => `tenants/panel/${tenant.motor === 'terraform' ? 'te
 export function configurarDespliegue(env = process.env) {
   const cuenta = env.PFM2_AWS_ACCOUNT;
   const bucket = env.PFM2_STATE_BUCKET;
+  const amiPersonalizada = env.PFM2_AMI_ID;
   if (!cuenta && !bucket) return null;
   if (!/^[0-9]{12}$/.test(cuenta ?? '') || !/^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/.test(bucket ?? '')) {
     throw new Error('Configura PFM2_AWS_ACCOUNT y PFM2_STATE_BUCKET para habilitar el despliegue en AWS.');
   }
+  if (amiPersonalizada && !idAmi.test(amiPersonalizada)) {
+    throw new Error('PFM2_AMI_ID debe contener el identificador de una AMI de AWS.');
+  }
   return {
-    cuenta, bucket,
+    cuenta, bucket, amiPersonalizada, ansible: env.PFM2_ANSIBLE === '1', escaneos: env.PFM2_ESCANEOS === '1',
     perfil: env.PFM2_DEPLOY_PROFILE ?? 'pfm2-deploy',
     rol: 'pfm2-panel-deploy',
     limite: `arn:aws:iam::${cuenta}:policy/proyecto-final-modulo-2/pfm2-instance-boundary`,
@@ -101,22 +107,61 @@ function revisarPlan(plan, tenant) {
   }
 }
 
-async function seleccionarAmi(aws, directorio) {
+async function revisarSeguridad(config, motor, directorio, archivo, instancias, progreso, guardarEscaneos) {
+  if (!config.escaneos) return;
+  progreso('Ejecutando Trivy, Gitleaks y Conftest.');
+  const resultados = await escanearDespliegue({ motor, directorio, archivo, instancias });
+  guardarEscaneos(resultados);
+  const fallos = resultados.filter(({ estado }) => estado === 'error').map(({ nombre }) => nombre);
+  if (fallos.length) throw new Error(`Escaneo incompleto (${fallos.join(', ')}). Revisa las herramientas y reintenta.`);
+}
+
+export async function seleccionarAmi(aws, directorio, { amiPersonalizada, cuenta }) {
   const ruta = join(directorio, 'ami.txt');
   try {
     return (await readFile(ruta, 'utf8')).trim();
   } catch (error) {
     if (error.code !== 'ENOENT') throw error;
   }
-  const { Parameter } = await aws('ssm', 'get-parameter', '--name',
-    '/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64');
+  let ami = amiPersonalizada;
+  if (ami) {
+    const { Images } = await aws('ec2', 'describe-images', '--image-ids', ami);
+    const imagen = Images?.[0];
+    if (imagen?.ImageId !== ami || imagen.OwnerId !== cuenta || imagen.State !== 'available' ||
+        imagen.Public !== false || imagen.Architecture !== 'x86_64' || imagen.RootDeviceType !== 'ebs') {
+      throw new Error('La AMI configurada debe estar disponible en Ohio, ser privada, usar x86_64 y EBS, y pertenecer a la cuenta del proyecto.');
+    }
+  } else {
+    const { Parameter } = await aws('ssm', 'get-parameter', '--name',
+      '/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64');
+    ami = Parameter.Value;
+  }
   try {
-    await writeFile(ruta, Parameter.Value, { flag: 'wx' });
-    return Parameter.Value;
+    await writeFile(ruta, ami, { flag: 'wx' });
+    return ami;
   } catch (error) {
     if (error.code !== 'EEXIST') throw error;
     return (await readFile(ruta, 'utf8')).trim();
   }
+}
+
+async function seleccionarArranque(directorio, config) {
+  const ruta = join(directorio, 'arranque.txt');
+  try {
+    await readFile(join(directorio, 'ami.txt'), 'utf8');
+    await writeFile(ruta, 'shell', { flag: 'wx' });
+  } catch (error) {
+    if (error.code === 'ENOENT') {
+      try {
+        await writeFile(ruta, config.ansible ? 'ansible' : 'shell', { flag: 'wx' });
+      } catch (escritura) {
+        if (escritura.code !== 'EEXIST') throw escritura;
+      }
+    } else if (error.code !== 'EEXIST') {
+      throw error;
+    }
+  }
+  return (await readFile(ruta, 'utf8')) === 'ansible';
 }
 
 async function comprobarArranque(aws, servidores) {
@@ -146,14 +191,14 @@ async function comprobarServicios(aws, servidores, comandos) {
   const solicitudes = await Promise.all(Object.entries(comandos).map(async ([rol, comando]) => {
     const parametros = JSON.stringify({
       commands: ['set -e', 'cloud-init status --wait', comando],
-      executionTimeout: ['300'],
+      executionTimeout: ['600'],
     });
     const { Command } = await aws('ssm', 'send-command', '--instance-ids', servidores[rol].id,
       '--document-name', 'AWS-RunShellScript', '--parameters', parametros);
     return { id: servidores[rol].id, comando: Command.CommandId, rol };
   }));
   const pendientes = new Set(solicitudes);
-  for (let intento = 0; intento < 66 && pendientes.size; intento++) {
+  for (let intento = 0; intento < 126 && pendientes.size; intento++) {
     for (const solicitud of pendientes) {
       const { CommandInvocations } = await aws('ssm', 'list-command-invocations',
         '--command-id', solicitud.comando, '--instance-id', solicitud.id);
@@ -186,17 +231,19 @@ export async function conectarAws(config, ejecutarComando = ejecutar, cwd) {
   return { aws, env };
 }
 
-export async function desplegarHcl({ config, directorio, datosTenant, tenant, progreso, ejecutarComando = ejecutar }) {
+export async function desplegarHcl({ config, directorio, datosTenant, tenant, progreso, guardarEscaneos, ejecutarComando = ejecutar }) {
   if (!ejecutable.test(tenant.identificador)) throw new Error('El identificador del tenant no es válido.');
   const cwd = await prepararTrabajo(directorio, tenant);
   const { aws, env } = await conectarAws(config, ejecutarComando, cwd);
   const motor = motorHcl(tenant.motor);
   const ejecutarHcl = (...args) => ejecutarComando(motor, args, { cwd, env });
   const nombre = motor === 'terraform' ? 'Terraform' : 'OpenTofu';
-  const ami = await seleccionarAmi(aws, datosTenant);
+  const ansible = await seleccionarArranque(datosTenant, config);
+  const ami = await seleccionarAmi(aws, datosTenant, config);
   const variables = {
     account_id: config.cuenta, tenant_id: tenant.identificador, environment: tenant.entorno,
     plan: tenant.plan.id, ami_id: ami, permissions_boundary_arn: config.limite, managed_by: nombre,
+    use_ansible: ansible,
   };
   const clave = claveHcl(tenant);
   await writeFile(join(cwd, 'tenant.tfvars.json'), JSON.stringify(variables));
@@ -206,7 +253,24 @@ export async function desplegarHcl({ config, directorio, datosTenant, tenant, pr
     `-backend-config=workspace_key_prefix=tenants/panel/${motor === 'terraform' ? 'terraform/' : ''}workspaces`);
   progreso(`Generando y revisando el plan de ${nombre}.`);
   await ejecutarHcl('plan', '-input=false', '-no-color', '-lock-timeout=30s', '-var-file=tenant.tfvars.json', '-out=tenant.tfplan');
-  revisarPlan(JSON.parse(await ejecutarHcl('show', '-json', 'tenant.tfplan')), tenant.identificador);
+  const planJson = await ejecutarHcl('show', '-json', 'tenant.tfplan');
+  const plan = JSON.parse(planJson);
+  revisarPlan(plan, tenant.identificador);
+  if (config.escaneos) {
+    const archivo = join(directorio, 'plan-escaneo.json');
+    await writeFile(archivo, planJson, { mode: 0o600 });
+    try {
+      const instancias = plan.resource_changes.filter(({ type, mode }) => type === 'aws_instance' && mode === 'managed')
+        .map(({ name, index, change: { after } }) => ({
+          id: index ?? name, comprobar_configuracion: true,
+          imdsv2: after.metadata_options?.[0]?.http_tokens === 'required',
+          cifrado: after.root_block_device?.[0]?.encrypted === true,
+        }));
+      await revisarSeguridad(config, tenant.motor, directorio, archivo, instancias, progreso, guardarEscaneos);
+    } finally {
+      await rm(archivo, { force: true });
+    }
+  }
   progreso('Aprovisionando la red y las tres instancias en AWS.');
   await ejecutarHcl('apply', '-input=false', '-no-color', '-lock-timeout=30s', 'tenant.tfplan');
   const outputs = JSON.parse(await ejecutarHcl('output', '-json'));
@@ -220,26 +284,35 @@ export async function desplegarHcl({ config, directorio, datosTenant, tenant, pr
     instancias,
     volumenes: Object.fromEntries(discos.map(({ rol, volumen }) => [rol, volumen])),
     app_commit: outputs.deployment.value.app_commit,
-    ami,
+    ami, arranque: ansible ? 'ansible' : 'shell',
     [carpetaHcl(tenant.motor)]: versiones.tofu_version ?? versiones.terraform_version,
     proveedores: versiones.provider_selections,
     plantilla: createHash('sha256').update(await readFile(join(cwd, 'main.tf'))).digest('hex'),
   };
 }
 
-export async function desplegarCloudFormation({ config, directorio, datosTenant, tenant, progreso, ejecutarComando = ejecutar }) {
+export async function desplegarCloudFormation({ config, directorio, datosTenant, tenant, progreso, guardarEscaneos, ejecutarComando = ejecutar }) {
   await mkdir(directorio, { recursive: true });
   const { aws, env } = await conectarAws(config, ejecutarComando, directorio);
-  const ami = await seleccionarAmi(aws, datosTenant);
+  const ansible = await seleccionarArranque(datosTenant, config);
+  const ami = await seleccionarAmi(aws, datosTenant, config);
   const { Images } = await aws('ec2', 'describe-images', '--image-ids', ami);
   if (Images.length !== 1 || Images[0].RootDeviceType !== 'ebs' || Images[0].Architecture !== 'x86_64' ||
       !Images[0].RootDeviceName) throw new Error('La AMI fijada no tiene un disco raíz EBS x86_64.');
-  const plantilla = await generarPlantilla(tenant, { ami, discoRaiz: Images[0].RootDeviceName, limite: config.limite });
+  const plantilla = await generarPlantilla(tenant, { ami, discoRaiz: Images[0].RootDeviceName, limite: config.limite, ansible });
   const cuerpo = JSON.stringify(plantilla);
   if (Buffer.byteLength(cuerpo) > 51_200) throw new Error('La plantilla del tenant excede el tamaño en línea de CloudFormation.');
   const huella = createHash('sha256').update(cuerpo).digest('hex');
   const archivo = join(directorio, 'tenant.cloudformation.json');
   await writeFile(archivo, cuerpo);
+  if (config.escaneos) {
+    const instancias = Object.entries(plantilla.Resources).filter(([, r]) => r.Type === 'AWS::EC2::Instance')
+      .map(([id, { Properties: p }]) => ({ id, comprobar_configuracion: true,
+        imdsv2: p.MetadataOptions?.HttpTokens === 'required',
+        cifrado: p.BlockDeviceMappings?.some(({ Ebs }) => Ebs?.Encrypted === true),
+      }));
+    await revisarSeguridad(config, tenant.motor, directorio, archivo, instancias, progreso, guardarEscaneos);
+  }
   const pila = await aprovisionarPila(aws, { tenant, plantilla, archivo, huella, progreso });
   const salidas = new Map(pila.Outputs?.map(({ OutputKey, OutputValue }) => [OutputKey, OutputValue]));
   const instancias = Object.fromEntries(esperado.map((rol) =>
@@ -254,25 +327,38 @@ export async function desplegarCloudFormation({ config, directorio, datosTenant,
   return {
     pila: pila.StackId, instancias,
     volumenes: Object.fromEntries(discos.map(({ rol, volumen }) => [rol, volumen])),
-    app_commit: salidas.get('AppCommit'), ami,
+    app_commit: salidas.get('AppCommit'), ami, arranque: ansible ? 'ansible' : 'shell',
     cloudformation: plantilla.AWSTemplateFormatVersion,
     aws_cli: (await ejecutarComando('aws', ['--version'], { cwd: directorio, env })).trim(),
     plantilla: pila.Tags.find(({ Key }) => Key === 'TemplateDigest')?.Value,
   };
 }
 
-export async function desplegarPulumi({ config, directorio, datosTenant, tenant, progreso, ejecutarComando = ejecutar }) {
+export async function desplegarPulumi({ config, directorio, datosTenant, tenant, progreso, guardarEscaneos, ejecutarComando = ejecutar }) {
   if (!ejecutable.test(tenant.identificador)) throw new Error('El identificador del tenant no es válido.');
   await mkdir(directorio, { recursive: true });
   const { aws, env } = await conectarAws(config, ejecutarComando, directorio);
-  const ami = await seleccionarAmi(aws, datosTenant);
-  const cwd = await prepararProgramaPulumi(datosTenant, tenant, { ...config, ami });
+  const ansible = await seleccionarArranque(datosTenant, config);
+  const ami = await seleccionarAmi(aws, datosTenant, config);
+  const cwd = await prepararProgramaPulumi(datosTenant, tenant, { ...config, ami, ansible });
   progreso('Abriendo el estado remoto de Pulumi en S3.');
   const pila = await abrirPilaPulumi({ ejecutar: ejecutarComando, env, config, cwd, tenant, crear: true });
   progreso('Generando y revisando la vista previa de Pulumi.');
   const archivo = join(directorio, 'pulumi-plan.json');
   const preview = JSON.parse(await pila.ejecutar('preview', '--json', '--show-sames', '--save-plan', archivo));
   revisarPreviewPulumi(preview, tenant);
+  if (config.escaneos) {
+    const { resourcePlans } = JSON.parse(await readFile(archivo, 'utf8'));
+    const instancias = preview.steps.filter(({ urn }) => urn.includes('::aws:ec2/instance:Instance::'))
+      .map(({ urn, op }) => {
+        const entradas = resourcePlans?.[urn]?.goal?.inputDiff?.adds;
+        return { id: urn.split('::').at(-1), comprobar_configuracion: op === 'create',
+          imdsv2: entradas?.metadataOptions?.httpTokens === 'required',
+          cifrado: entradas?.rootBlockDevice?.encrypted === true,
+        };
+      });
+    await revisarSeguridad(config, tenant.motor, directorio, join(cwd, 'package-lock.json'), instancias, progreso, guardarEscaneos);
+  }
   progreso('Aplicando el plan de Pulumi para el tenant.');
   await pila.ejecutar('up', '--plan', archivo, '--yes', '--skip-preview');
   const salidas = JSON.parse(await pila.ejecutar('stack', 'output', '--json'));
@@ -283,7 +369,8 @@ export async function desplegarPulumi({ config, directorio, datosTenant, tenant,
   const paquetes = JSON.parse(await readFile(join(cwd, 'package-lock.json'), 'utf8')).packages;
   return {
     instancias, volumenes: Object.fromEntries(discos.map(({ rol, volumen }) => [rol, volumen])),
-    app_commit: salidas.appCommit, ami, pulumi: (await pila.version()).trim(), aws_pulumi: paquetes['node_modules/@pulumi/aws'].version,
+    app_commit: salidas.appCommit, ami, arranque: ansible ? 'ansible' : 'shell',
+    pulumi: (await pila.version()).trim(), aws_pulumi: paquetes['node_modules/@pulumi/aws'].version,
     plantilla: await huellaPulumi(cwd),
   };
 }
@@ -574,6 +661,7 @@ export function iniciarTrabajador(registro, directorio, ejecutarTrabajo) {
         const datosTenant = join(directorio, tenant.identificador);
         const salida = await ejecutarTrabajo({
           directorio: join(datosTenant, String(trabajo.id)), datosTenant, tenant, progreso, tipo: trabajo.tipo,
+          guardarEscaneos: (resultados) => registro.guardarEscaneos(trabajo.id, resultados),
           infraestructura: registro.obtenerInfraestructura(tenant.identificador), trabajoId: trabajo.id,
           retiro: registro.obtenerRetiro(tenant.identificador),
         });

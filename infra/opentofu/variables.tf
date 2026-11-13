@@ -103,3 +103,9 @@ variable "web_origin" {
     error_message = "Indica un origen HTTP local con el puerto del túnel."
   }
 }
+
+variable "use_ansible" {
+  description = "Ejecutar los playbooks locales de Ansible al arrancar las EC2."
+  type        = bool
+  default     = false
+}

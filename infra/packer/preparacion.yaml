@@ -1,0 +1,46 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Perfil de Systems Manager y grupo de seguridad para la EC2 temporal de Packer.
+Parameters:
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: VPC existente en Ohio que contiene la subred de construcción.
+Resources:
+  RolConstructor:
+    Type: AWS::IAM::Role
+    Properties:
+      Path: /proyecto-final-modulo-2/packer/
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - !Sub arn:${AWS::Partition}:iam::aws:policy/AmazonSSMManagedInstanceCore
+  PerfilConstructor:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Path: /proyecto-final-modulo-2/packer/
+      Roles:
+        - !Ref RolConstructor
+  GrupoConstructor:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Salida HTTPS de la instancia de Packer hacia Systems Manager y repositorios.
+      VpcId: !Ref VpcId
+      SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Project
+          Value: proyecto-final-modulo-2
+        - Key: ManagedBy
+          Value: Packer
+Outputs:
+  PerfilInstancia:
+    Value: !Ref PerfilConstructor
+  GrupoSeguridad:
+    Value: !GetAtt GrupoConstructor.GroupId

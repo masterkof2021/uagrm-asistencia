@@ -98,6 +98,32 @@ AWS confirmó el retiro de 31 recursos y tres discos raíz en cada prueba. La de
 
 La cuota aplicada de Ohio subió a nueve VPC. El ensayo posterior desplegó dos tenants simultáneos con OpenTofu, verificó su aislamiento y confirmó el retiro de ambos. [Guía y evidencia de la demo de aislamiento](demo-aislamiento.md).
 
+## Pruebas con la AMI de Packer y Ansible
+
+El 13 de noviembre de 2026, el panel desplegó un tenant Básico por motor en Ohio con la AMI privada `ami-07277c62be0b7d88f`. Cada tenant arrancó tres EC2 y el panel verificó Nginx, la API y MySQL mediante Systems Manager. El historial guardó la AMI y el modo de arranque `ansible`.
+
+| Motor | Tenant temporal | Resultado |
+| --- | --- | --- |
+| OpenTofu 1.13.1 | `ansible-basico-20261113031235` | Operativo y retirado |
+| Terraform 1.16.6 | `ansible-terraform-20261113053307` | Operativo y retirado |
+| CloudFormation | `ansible-cloudformation-20261113053307` | Operativo y pila retirada |
+| Pulumi 3.270.0 | `ansible-pulumi-20261113054120` | Operativo y retirado |
+
+Terraform y CloudFormation se ejecutaron en paralelo. Pulumi empezó tras liberar el cupo de Terraform. AWS confirmó cero EC2 activas, discos EBS y VPC de los tres últimos ensayos y un total de siete VPC de las nueve permitidas en Ohio. La AMI privada se conserva para la demo. [Configuración de Ansible](../plataforma/README.md#despliegue-desde-el-panel).
+
+## Ensayo de escaneos antes de desplegar
+
+El 13 de noviembre de 2026, el panel ejecutó Trivy 0.76.1, Gitleaks 8.30.1 y Conftest 0.71.1 antes de aplicar los despliegues. Los cuatro tenants usaron la AMI privada y Ansible. El panel verificó las tres capas de cada tenant y guardó los resultados en el historial.
+
+| Tenant | Trivy | Gitleaks | Conftest |
+| --- | --- | --- | --- |
+| Básico con OpenTofu | 3 hallazgos, reglas AWS-0029 y AWS-0178 | 0 hallazgos | 0 hallazgos |
+| Estándar con CloudFormation | 9 hallazgos, reglas AWS-0098, AWS-0104, AWS-0124 y AWS-0178 | 0 hallazgos | 0 hallazgos |
+| Básico con Terraform | 3 hallazgos, reglas AWS-0029 y AWS-0178 | 0 hallazgos | 0 hallazgos |
+| Estándar con Pulumi | 2 hallazgos en dependencias, CVE-2026-118773 y CVE-2026-118764 | 0 hallazgos | 0 hallazgos |
+
+OpenTofu y CloudFormation se probaron en la primera ronda. Terraform y Pulumi completaron la segunda. El panel registró los cuatro retiros y AWS devolvió cero EC2 activas, discos EBS y VPC asociados a cada ronda. [Alcance de cada escáner](../plataforma/README.md#escaneos-antes-de-desplegar).
+
 Para verificar la identidad de la CLI en otra sesión, consulta STS después de autenticarte. [Inicio de sesión con AWS CLI](https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-sign-in.html).
 
 ```powershell

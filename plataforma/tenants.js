@@ -83,6 +83,9 @@ export function abrirRegistro(ruta) {
     if (!columnas.some(({ name }) => name === 'estado_anterior')) {
       db.exec('ALTER TABLE despliegues ADD COLUMN estado_anterior TEXT');
     }
+    if (!columnas.some(({ name }) => name === 'escaneos')) {
+      db.exec('ALTER TABLE despliegues ADD COLUMN escaneos TEXT');
+    }
   });
 
   const insertar = db.prepare(`
@@ -136,6 +139,7 @@ export function abrirRegistro(ruta) {
     RETURNING id, tenant_id, tipo
   `);
   const consultar = db.prepare('SELECT * FROM despliegues WHERE tenant_id = ? ORDER BY id DESC');
+  const guardarEscaneos = db.prepare("UPDATE despliegues SET escaneos = ? WHERE id = ? AND estado = 'en-curso'");
   const actualizar = db.prepare(`
     UPDATE despliegues SET estado = ?, fase = ?, actualizado = ?, salida = ?
     WHERE id = ? AND estado = 'en-curso'
@@ -252,6 +256,7 @@ export function abrirRegistro(ruta) {
     consultar(identificador) {
       return consultar.all(identificador).map((trabajo) => ({
         ...trabajo, salida: trabajo.salida ? JSON.parse(trabajo.salida) : null,
+        escaneos: trabajo.escaneos ? JSON.parse(trabajo.escaneos) : [],
       }));
     },
     obtenerInfraestructura(identificador) {
@@ -278,6 +283,7 @@ export function abrirRegistro(ruta) {
       });
     },
     tocar: (id) => tocar.run(fecha(), id),
+    guardarEscaneos: (id, escaneos) => guardarEscaneos.run(JSON.stringify(escaneos), id),
     cerrar: () => db.close(),
   };
 }

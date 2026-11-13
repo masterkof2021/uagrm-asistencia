@@ -2,6 +2,8 @@
 
 La demo usa un tenant **Básico** y uno **Estándar**, ambos en el entorno **Pruebas** de AWS Ohio. Cada uno recibe su propia VPC, una EC2 para Nginx, otra para la API y otra para MySQL. El panel administra el ciclo de vida y Prometheus recoge las métricas mediante Systems Manager.
 
+Este documento conserva el procedimiento y la evidencia del ensayo ya realizado. El [plan de cierre](plan-de-cierre.md#6-probar-y-documentar-la-demostración-final) define las comprobaciones adicionales para la grabación final, incluida la AMI personalizada y los resultados de escaneo en ambos tenants.
+
 ```mermaid
 flowchart LR
   P[Panel local] --> I[Motor de infraestructura en AWS Ohio]

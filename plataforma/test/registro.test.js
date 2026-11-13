@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { setTimeout as esperar } from 'node:timers/promises';
-import { cambiarEstadoEc2, configurarDespliegue, desplegarHcl, gestionarRetiro, iniciarTrabajador } from '../despliegues.js';
+import { cambiarEstadoEc2, configurarDespliegue, desplegarHcl, gestionarRetiro, iniciarTrabajador, seleccionarAmi } from '../despliegues.js';
 import { catalogo } from '../catalogo.js';
 import { consultarAlertas, iniciarHistorialAlertas } from '../alertas.js';
 import { crearServidor } from '../server.js';
@@ -149,10 +149,12 @@ test('la API encola un despliegue único y permite reintentar sin perder el hist
   const registro = abrirRegistro(':memory:');
   const { url, cerrar } = await iniciar(registro, true);
   let intentos = 0;
-  const detener = iniciarTrabajador(registro, tmpdir(), async ({ tenant, progreso }) => {
+  const detener = iniciarTrabajador(registro, tmpdir(), async ({ tenant, progreso, guardarEscaneos }) => {
     assert.equal(tenant.identificador, solicitud.identificador);
     progreso('Plan verificado.');
     intentos += 1;
+    guardarEscaneos([{ nombre: 'trivy', estado: intentos === 1 ? 'error' : 'hallazgos',
+      hallazgos: intentos === 1 ? null : 2 }]);
     if (intentos === 1) throw new Error('Falló la comprobación de arranque.');
     return { instancias: { frontend: 'i-ejemplo' } };
   });
@@ -177,6 +179,7 @@ test('la API encola un despliegue único y permite reintentar sin perder el hist
   assert.equal((await iniciarDespliegue()).status, 202);
   const historial = await esperarEstado('listo');
   assert.deepEqual(historial.map(({ estado }) => estado), ['listo', 'error']);
+  assert.deepEqual(historial.map(({ escaneos }) => escaneos[0].estado), ['hallazgos', 'error']);
   assert.equal(historial[0].salida.instancias.frontend, 'i-ejemplo');
   assert.equal((await iniciarDespliegue()).status, 409);
 });
@@ -209,6 +212,25 @@ test('conserva los tenants al reabrir SQLite y aplica filtros combinados', async
     await cerrar();
     reabierto.cerrar();
   }
+});
+
+test('valida la AMI privada de la cuenta y la conserva en reintentos', async (t) => {
+  const directorio = await mkdtemp(join(tmpdir(), 'uagrm-ami-'));
+  t.after(() => rm(directorio, { recursive: true }));
+  const cuenta = '123456789012';
+  const ami = 'ami-0123456789abcdef0';
+  const config = { cuenta, amiPersonalizada: ami };
+  const imagen = { ImageId: ami, OwnerId: cuenta, State: 'available',
+    Public: false, Architecture: 'x86_64', RootDeviceType: 'ebs' };
+  await assert.rejects(seleccionarAmi(async () => ({
+    Images: [{ ...imagen, OwnerId: '210987654321' }],
+  }), directorio, config), /cuenta del proyecto/);
+  assert.equal(await seleccionarAmi(async (...args) => {
+    assert.deepEqual(args, ['ec2', 'describe-images', '--image-ids', ami]);
+    return { Images: [imagen] };
+  }, directorio, config), ami);
+  assert.equal(await seleccionarAmi(() => assert.fail('Debe reutilizar la AMI guardada'),
+    directorio, { ...config, amiPersonalizada: 'ami-1234567890abcdef0' }), ami);
 });
 
 test('OpenTofu usa el estado del tenant y detiene un plan que reemplaza una instancia', async (t) => {

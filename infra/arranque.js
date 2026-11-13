@@ -8,7 +8,7 @@ export const capas = {
 };
 const inicio = new URL('./opentofu/cloud-init/', import.meta.url);
 
-export async function scriptsArranque(prefijo, comandoSecretos) {
+export async function scriptsArranque(prefijo, comandoSecretos, ansible = false) {
   const variables = {
     app_commit: appCommit, parameter_prefix: prefijo, frontend_ip: capas.frontend.ip, backend_ip: capas.backend.ip,
     database_ip: capas.database.ip, web_origin: 'http://127.0.0.1:8080', read_secret_command: comandoSecretos,
@@ -20,6 +20,11 @@ export async function scriptsArranque(prefijo, comandoSecretos) {
     });
   return Object.fromEntries(await Promise.all(Object.keys(capas).map(async (rol) => {
     const script = await readFile(new URL(`${rol}.sh`, inicio), 'utf8');
-    return [rol, `${comun}\n${script}`.replaceAll('\r\n', '\n')];
+    if (!ansible) return [rol, `${comun}\n${script}`.replaceAll('\r\n', '\n')];
+    const leer = (archivo) => readFile(new URL(archivo, inicio), 'utf8');
+    const capa = rol === 'frontend' ? [] : [await leer('capa.sh'), script, 'PFM2_CAPA'];
+    const partes = [comun, ...capa, `pfm2_rol=${rol}`, await leer('ansible.sh'),
+      await leer(`${rol}.yml`), await leer('ejecutar-ansible.sh')];
+    return [rol, partes.map((parte) => parte.trimEnd()).join('\n').replaceAll('\r\n', '\n') + '\n'];
   })));
 }

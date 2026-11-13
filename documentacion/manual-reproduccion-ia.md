@@ -5,10 +5,12 @@ Este manual permite a otra IA o a un operador reproducir la plataforma que admin
 ## 1. Punto de partida y alcance
 
 - La aplicación de asistencia se conserva en `asistencia/`. Los scripts de arranque descargan [UAGRM Asistencia](https://github.com/masterkof2021/uagrm-asistencia) en el commit `ba7a8216be0c1c836925ea8964ad463295d961d0`. Si cambias la revisión, verifica que la copia incluida, el valor HCL `app_commit` y `infra/arranque.js` se refieran al mismo código.
-- Para reproducir el proyecto completo, recibe una copia del **árbol de trabajo del proyecto final** o un commit que lo incluya. Al preparar este manual, el remoto `upstream` apuntaba a la aplicación base y `git status --short` mostraba componentes del proyecto final pendientes de commit. Una clonación de ese remoto por sí sola solo proporciona la base de asistencia.
+- Clona la rama `main` de [masterkof2021/uagrm-asistencia](https://github.com/masterkof2021/uagrm-asistencia/tree/main) para obtener el código, la infraestructura y la documentación del proyecto final. El commit `1e2a75a` contiene la versión probada que describe este manual.
 - Incluye `README.md`, `.gitignore`, `asistencia/`, `plataforma/`, `infra/`, `observabilidad/` y `documentacion/`. Conserva los dos `.terraform.lock.hcl` y los `package-lock.json`. Omite `node_modules`, directorios `.terraform`, archivos de estado y planes, entornos locales, `plataforma/data/` y `observabilidad/data/` en el paquete de código.
 - Para una **reproducción nueva**, crea registros nuevos en SQLite. Para **continuar un entorno existente**, conserva la base local, los directorios de despliegue y el backend remoto. Las claves locales de Pulumi deben acompañar a su pila por un canal seguro. Abrir una base vacía no recupera automáticamente el inventario de otro panel.
 - Aplica los requisitos vigentes del proyecto. El alcance implementado es AWS Ohio, catálogo, aislamiento, ciclo de vida, aplicación de asistencia, historial y observabilidad. OpenTofu, Terraform, CloudFormation y Pulumi son motores ejecutables. Cloud-init hace la configuración de las EC2 de este flujo. El alcance, las exclusiones y los entregables de presentación están en [requisitos.md](requisitos.md).
+
+La AMI privada de Packer, Ansible y los escáneres se activan desde la configuración del panel. Los cuatro motores completaron las comprobaciones de servicio en Ohio con la AMI y Ansible. [Configuración de escaneos](../plataforma/README.md#escaneos-antes-de-desplegar) · [Ensayos en Ohio](aws-preparacion-demo.md#pruebas-con-la-ami-de-packer-y-ansible).
 
 Comprueba la copia antes de trabajar:
 
@@ -143,6 +145,8 @@ $env:PFM2_STATE_BUCKET = $bucket
 $env:PFM2_MONITORING = '1'
 npm.cmd --prefix plataforma start
 ```
+
+Para reproducir el ensayo con Packer y Ansible, fija `PFM2_AMI_ID` con el ID de la AMI privada en Ohio y `PFM2_ANSIBLE=1` antes de iniciar el panel. Registra un tenant nuevo y verifica el campo `arranque` del resultado. [Construcción y ensayo de la AMI](../infra/packer/README.md).
 
 En el panel, registra una institución con nombre, identificador, contacto, entorno, plan y motor. Usa identificadores únicos de 3 a 40 caracteres, con minúsculas, números y guiones entre palabras. Para otra IA, este ejemplo reproduce las mismas operaciones por HTTP en una segunda terminal.
 

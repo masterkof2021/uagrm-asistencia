@@ -125,6 +125,12 @@ function filaTenant(tenant) {
     boton.addEventListener('click', () => mostrarRetiro(tenant, boton));
     accion.append(boton);
   }
+  if (tenant.fase_despliegue) {
+    const boton = nodo('button', 'Ver historial', 'secundario');
+    boton.type = 'button';
+    boton.addEventListener('click', () => mostrarHistorial(tenant));
+    accion.append(boton);
+  }
   fila.append(
     institucion,
     nodo('td', tenant.plan.nombre),
@@ -134,6 +140,38 @@ function filaTenant(tenant) {
     accion,
   );
   return fila;
+}
+
+async function mostrarHistorial(tenant) {
+  const dialogo = porId('historial-despliegues');
+  const detalle = porId('detalle-historial');
+  porId('titulo-historial').textContent = `Historial de ${tenant.nombre}`;
+  detalle.replaceChildren(nodo('p', 'Cargando historial…'));
+  dialogo.showModal();
+  try {
+    const historial = await api(`/api/tenants/${tenant.identificador}/despliegues`);
+    const intentos = historial.filter(({ tipo }) => tipo === 'desplegar');
+    const nombres = { trivy: 'Trivy', gitleaks: 'Gitleaks', conftest: 'Conftest' };
+    detalle.replaceChildren(...intentos.map((intento) => {
+      const seccion = nodo('section');
+      seccion.append(nodo('h3', `Intento ${intento.id} · ${estados[intento.estado] ?? intento.estado}`),
+        nodo('p', intento.fase));
+      const controles = nodo('ul');
+      for (const control of intento.escaneos ?? []) {
+        const resultado = control.estado === 'error' ? 'Error de ejecución' :
+          control.hallazgos === 0 ? 'Sin hallazgos' : `${control.hallazgos} hallazgos`;
+        const item = nodo('li', `${nombres[control.nombre]} ${control.version ?? ''} · ${resultado}`);
+        item.append(nodo('small', `${control.alcance} · ${fechaAlerta.format(new Date(control.fecha))}`));
+        if (control.reglas.length) item.append(nodo('small', control.reglas.join(', ')));
+        controles.append(item);
+      }
+      seccion.append(controles.childElementCount ? controles : nodo('p', 'Sin escaneos registrados.'));
+      return seccion;
+    }));
+    if (!intentos.length) detalle.append(nodo('p', 'Esta institución todavía no tiene intentos de despliegue.'));
+  } catch {
+    detalle.replaceChildren(nodo('p', 'No se pudo consultar el historial.'));
+  }
 }
 
 async function mostrarRetiro(tenant, boton) {

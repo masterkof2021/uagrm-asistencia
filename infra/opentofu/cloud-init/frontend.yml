@@ -1,0 +1,66 @@
+- name: Configurar el frontend
+  hosts: localhost
+  gather_facts: false
+  vars:
+    ansible_python_interpreter: /opt/pfm2/ansible/bin/python
+    backend_ip: "{{ lookup('ansible.builtin.env', 'PFM2_BACKEND_IP') }}"
+    app_commit: "{{ lookup('ansible.builtin.env', 'PFM2_APP_COMMIT') }}"
+    api_location: |-
+      location /api/ {
+              access_log /var/log/nginx/pfm2-api.log pfm2_api;
+  tasks:
+    - name: Instalar Nginx si falta
+      ansible.builtin.shell: rpm -q nginx >/dev/null || dnf install -y nginx
+      register: nginx_rpm
+      changed_when: "'Complete!' in nginx_rpm.stdout"
+    - name: Crear el directorio de la aplicación
+      ansible.builtin.file:
+        path: /opt/asistencia
+        state: directory
+        mode: '0755'
+    - name: Extraer la versión de la aplicación
+      ansible.builtin.unarchive:
+        src: "https://codeload.github.com/masterkof2021/uagrm-asistencia/tar.gz/{{ app_commit }}"
+        dest: /opt/asistencia
+        remote_src: true
+        extra_opts: [--strip-components=1]
+    - name: Crear la raíz web con permiso de acceso para Nginx
+      ansible.builtin.file:
+        path: /var/www/asistencia
+        state: directory
+        mode: '0755'
+    - name: Publicar archivos estáticos
+      ansible.builtin.copy:
+        src: /opt/asistencia/public/
+        dest: /var/www/asistencia/
+        remote_src: true
+        mode: preserve
+        directory_mode: '0755'
+    - name: Configurar el formato de métricas
+      ansible.builtin.copy:
+        dest: /etc/nginx/conf.d/00-pfm2-metricas.conf
+        content: "log_format pfm2_api '$msec $status';\n"
+        mode: '0644'
+      register: metricas
+    - name: Leer la configuración Nginx de la aplicación
+      ansible.builtin.slurp:
+        src: /opt/asistencia/deploy/client/asistencia.conf
+      register: nginx_origen
+    - name: Configurar el proxy a la API
+      ansible.builtin.copy:
+        dest: /etc/nginx/conf.d/asistencia.conf
+        content: >-
+          {{ nginx_origen.content | b64decode
+             | replace('192.168.1.30:8090', backend_ip ~ ':8090')
+             | replace('server_name _;', 'server_name ~^.+$;')
+             | replace('location /api/ {', api_location) }}
+        mode: '0644'
+      register: proxy
+    - name: Validar Nginx
+      ansible.builtin.command: nginx -t
+      changed_when: false
+    - name: Habilitar Nginx y cargar su configuración
+      ansible.builtin.systemd_service:
+        name: nginx
+        enabled: true
+        state: "{{ 'restarted' if proxy.changed or metricas.changed else 'started' }}"

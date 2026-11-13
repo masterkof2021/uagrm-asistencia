@@ -16,6 +16,12 @@ Selecciona un plan y comprueba la memoria y el almacenamiento de las tres capas 
 
 ## Despliegue desde el panel
 
+Para probar el arranque con Ansible, inicia el panel con `PFM2_ANSIBLE=1` y `PFM2_AMI_ID` apuntando a la AMI privada de Packer. Registra un tenant nuevo para el ensayo. El panel fija el modo de arranque y la imagen en el directorio del tenant y los incluye en el historial al verificar los servicios. [Construcción de la AMI](../infra/packer/README.md).
+
+Cloud-init ejecuta Ansible Core 2.20.1 localmente en cada EC2. Los playbooks están en [cloud-init](../infra/opentofu/cloud-init/). El del frontend configura el proxy y los archivos estáticos con módulos de Ansible. Los de la API y MySQL ejecutan la inicialización existente cuando falta el archivo que indica que terminó y habilitan el servicio. Los valores de arranque llegan desde Parameter Store o Secrets Manager según el motor. [Conexión local de Ansible](https://docs.ansible.com/projects/ansible-core/2.20/collections/ansible/builtin/local_connection.html).
+
+El 13 de noviembre de 2026, el panel desplegó el tenant Básico `ansible-basico-20261113031235` con OpenTofu y la AMI privada de Packer. Las tres EC2 ejecutaron sus playbooks al primer arranque y el panel confirmó MySQL, la API y Nginx sin intervención en las instancias. Las sondas del panel comprobaron HTTP 200 en la portada y HTTP 401 en la API sin sesión. El historial registró el modo `ansible` y la AMI.
+
 El panel usa AWS CLI y un perfil que asume el rol `pfm2-panel-deploy`. El rol y el límite de permisos de las instancias se definen en [panel-iam.yaml](../infra/opentofu/panel-iam.yaml). Con el rol disponible, configura el perfil con el usuario IAM autorizado como origen y valida la identidad antes de habilitar el ejecutor. Instala OpenTofu para tenants de ese motor. [Perfiles de rol de AWS CLI](https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-role.html).
 
 ```powershell
@@ -39,6 +45,16 @@ Con los permisos `ec2:StopInstances` y `ec2:StartInstances`, **Suspender** detie
 **Preparar retiro** genera un plan de destrucción para un tenant operativo o suspendido. En **Revisar retiro** puedes ver los recursos y discos afectados, incluido el disco con los registros de MySQL. **Cancelar retiro** devuelve el tenant a su estado previo. **Confirmar retiro** ejecuta el plan revisado y conserva en SQLite el historial del tenant. Si cambió el plan o se agregaron discos fuera de OpenTofu, el panel pide revisar el entorno antes de continuar.
 
 Con `PFM2_MONITORING=1`, la vista **Tenants** muestra las alertas activas y el historial reciente de detecciones y resoluciones, y enlaza al dashboard de Grafana. [Arranque de la observabilidad](../observabilidad/README.md).
+
+## Escaneos antes de desplegar
+
+En Windows, instala los binarios verificados desde la raíz del repositorio con `powershell -File asistencia/infra/cloudformation/scripts/Install-Scanners.ps1`. En Linux, agrega `trivy`, `gitleaks` y `conftest` al PATH. Inicia el panel con `PFM2_ESCANEOS=1` para ejecutar los tres controles antes de aplicar un despliegue nuevo o un reintento.
+
+- Trivy revisa el plan JSON de OpenTofu o Terraform, la plantilla generada de CloudFormation o las dependencias fijadas de Pulumi.
+- Gitleaks revisa los archivos versionables de infraestructura, del panel y del código y despliegue de Asistencia. Excluye los archivos ignorados y elimina el informe temporal después de resumirlo.
+- Conftest verifica que haya tres EC2 y comprueba IMDSv2 y cifrado en el plan de OpenTofu o Terraform, la plantilla de CloudFormation o las altas de la vista previa de Pulumi.
+
+Abre **Tenants → Ver historial** para consultar fecha en Bolivia, herramienta, versión, alcance, conteo y códigos de reglas por intento. Los hallazgos son informativos. Un error al ejecutar cualquiera de las herramientas detiene el intento antes de aplicar y el historial conserva los resultados obtenidos. [Formatos de IaC de Trivy](https://trivy.dev/docs/latest/coverage/iac/).
 
 ## API local
 

@@ -35,7 +35,7 @@ El proyecto ya tiene código y presentación en GitHub. Se ensayó en AWS Ohio e
 
 ## 5. Cerrar el acceso y la auditoría del panel
 
-- Añadir acceso para el administrador del panel local y asociar un operador autenticado a las nuevas operaciones. Mantener el acceso del administrador institucional y de los estudiantes dentro de la aplicación de cada tenant.
+- El panel local ya autentica al administrador y registra al operador que solicita cada operación. [Configuración y auditoría](../plataforma/README.md#ejecutar-en-local).
 - Verificar si el docente acepta el acceso actual por Systems Manager. Si exige una URL directa, probar una URL distinta por tenant con acceso controlado al frontend y actualizarla al reanudar si cambia la dirección. Mantener la API y MySQL accesibles únicamente desde sus capas autorizadas.
 
 **Cierre del paso.** El operador abre la aplicación correcta desde el panel o con el acceso documentado, y el historial permite saber quién inició cada operación nueva.

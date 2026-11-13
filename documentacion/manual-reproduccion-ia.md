@@ -79,7 +79,7 @@ npm.cmd --prefix plataforma test
 npm.cmd --prefix asistencia test
 ```
 
-`plataforma/` usa módulos nativos de Node.js, incluido `node:sqlite`. Desde una terminal sin la configuración AWS del proyecto, `npm.cmd --prefix plataforma start` arranca el panel local para probar el catálogo, el registro y los filtros. Verifica [el panel local](http://127.0.0.1:4173) o ejecuta `Invoke-RestMethod http://127.0.0.1:4173/api/catalogo`. Detén esa ejecución con `Ctrl+C` antes de abrir otra en el mismo puerto.
+`plataforma/` usa módulos nativos de Node.js, incluido `node:sqlite`. Configura primero las [credenciales del administrador local](../plataforma/README.md#ejecutar-en-local). Desde una terminal sin la configuración AWS del proyecto, `npm.cmd --prefix plataforma start` arranca el panel local para probar el catálogo, el registro y los filtros. Abre el panel e inicia sesión para verificar el catálogo, o usa el ejemplo de la sección 5 para autenticar tu cliente HTTP. [Panel local](http://127.0.0.1:4173) Detén esa ejecución con `Ctrl+C` antes de abrir otra en el mismo puerto.
 
 ## 4. Preparar AWS para una cuenta nueva o reutilizar una cuenta preparada
 
@@ -136,7 +136,7 @@ Antes de la demo simultánea verifica dos cupos de VPC y capacidad para seis EC2
 
 ## 5. Arrancar el panel con AWS y registrar un tenant
 
-En la terminal del panel, define los valores de la cuenta ya preparada. Al iniciar, SQLite crea las tablas `tenants`, `despliegues` y `alertas` en `plataforma/data/tenants.sqlite`. `TENANTS_DB` permite elegir otro archivo para separar una demostración. El directorio `despliegues` queda junto al archivo SQLite. `PORT` permite cambiar el puerto de administración y la configuración incluida de Prometheus apunta al puerto `4173`.
+Configura las credenciales del administrador local en la terminal del panel y define los valores de la cuenta ya preparada. Al iniciar, SQLite crea las tablas `tenants`, `despliegues` y `alertas` en `plataforma/data/tenants.sqlite`. `TENANTS_DB` permite elegir otro archivo para separar una demostración. El directorio `despliegues` queda junto al archivo SQLite. `PORT` permite cambiar el puerto de administración y la configuración incluida de Prometheus apunta al puerto `4173`.
 
 ```powershell
 $env:PFM2_DEPLOY_PROFILE = 'pfm2-deploy'
@@ -152,6 +152,14 @@ En el panel, registra una institución con nombre, identificador, contacto, ento
 
 ```powershell
 $panel = 'http://127.0.0.1:4173'
+$usuario = Read-Host 'Usuario del panel'
+$clave = [Net.NetworkCredential]::new('', (Read-Host 'Contraseña del panel' -AsSecureString)).Password
+try {
+  Invoke-RestMethod "$panel/api/sesion" -Method Post -ContentType 'application/json' `
+    -Body (@{ usuario = $usuario; clave = $clave } | ConvertTo-Json) -SessionVariable sesionPanel | Out-Null
+} finally {
+  Remove-Variable clave
+}
 $tenant = 'demo-repro-basico'
 $cuerpo = @{
   nombre = 'Institucion ficticia Basico'
@@ -162,13 +170,13 @@ $cuerpo = @{
   motor = 'opentofu'
 } | ConvertTo-Json -Compress
 
-Invoke-RestMethod "$panel/api/catalogo"
-Invoke-RestMethod "$panel/api/tenants" -Method Post -ContentType 'application/json' -Body $cuerpo
+Invoke-RestMethod "$panel/api/catalogo" -WebSession $sesionPanel
+Invoke-RestMethod "$panel/api/tenants" -Method Post -ContentType 'application/json' -Body $cuerpo -WebSession $sesionPanel
 $ruta = "$panel/api/tenants/$tenant"
-$trabajo = Invoke-RestMethod "$ruta/despliegues" -Method Post
+$trabajo = Invoke-RestMethod "$ruta/despliegues" -Method Post -WebSession $sesionPanel
 $trabajo | Select-Object id, estado, fase
 
-$historial = Invoke-RestMethod "$ruta/despliegues"
+$historial = Invoke-RestMethod "$ruta/despliegues" -WebSession $sesionPanel
 $historial | Where-Object id -eq $trabajo.id | Select-Object id, tipo, estado, fase
 ```
 
@@ -217,8 +225,8 @@ El retiro elimina los discos raíz y los datos de la institución. Confirma solo
 Para automatizar el cierre, prepara la revisión con la API y espera a que esté lista. Inspecciona `salida.recursos` y `salida.discos` antes de ejecutar el bloque de confirmación.
 
 ```powershell
-$revision = Invoke-RestMethod "$ruta/preparar-retiro" -Method Post
-$historial = Invoke-RestMethod "$ruta/despliegues"
+$revision = Invoke-RestMethod "$ruta/preparar-retiro" -Method Post -WebSession $sesionPanel
+$historial = Invoke-RestMethod "$ruta/despliegues" -WebSession $sesionPanel
 $revisado = $historial | Where-Object id -eq $revision.id
 $revisado | Select-Object id, estado, fase
 $revisado.salida.discos | Format-Table
@@ -229,7 +237,7 @@ Repite la consulta del historial si la revisión sigue en cola. Una vez leído e
 
 ```powershell
 if ($revisado.estado -ne 'retiro-pendiente') { throw 'La revisión todavía no está disponible.' }
-$retiro = Invoke-RestMethod "$ruta/retirar/$($revisado.id)" -Method Post
+$retiro = Invoke-RestMethod "$ruta/retirar/$($revisado.id)" -Method Post -WebSession $sesionPanel
 $retiro | Select-Object id, estado, fase
 ```
 

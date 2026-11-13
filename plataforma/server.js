@@ -6,11 +6,13 @@ import { catalogo } from './catalogo.js';
 import { abrirRegistro, validarRegistro } from './tenants.js';
 import { configurarDespliegue, ejecutarOperacionAws, iniciarTrabajador } from './despliegues.js';
 import { iniciarMonitor } from './monitor.js';
+import { configurarAcceso } from './acceso.js';
 
 const archivos = new Map([
   ['/', ['index.html', 'text/html']],
   ['/app.js', ['app.js', 'text/javascript']],
   ['/styles.css', ['styles.css', 'text/css']],
+  ['/acceso.js', ['acceso.js', 'text/javascript']],
 ]);
 const limiteBytes = 16 * 1024;
 
@@ -24,9 +26,9 @@ function responder(res, status, contenido, tipo = 'application/json') {
   res.end(tipo === 'application/json' ? JSON.stringify(contenido) : contenido);
 }
 
-async function leerRegistro(req, res) {
+async function leerJson(req, res) {
   if (req.headers['content-type']?.split(';')[0].trim() !== 'application/json') {
-    responder(res, 415, { mensaje: 'El registro debe enviarse como JSON.' });
+    responder(res, 415, { mensaje: 'La solicitud debe enviarse como JSON.' });
     return;
   }
   const partes = [];
@@ -36,21 +38,22 @@ async function leerRegistro(req, res) {
     if (bytes <= limiteBytes) partes.push(parte);
   }
   if (bytes > limiteBytes) {
-    responder(res, 413, { mensaje: 'Los datos del registro exceden el tamaño admitido.' });
+    responder(res, 413, { mensaje: 'La solicitud excede el tamaño admitido.' });
     return;
   }
   try {
-    return validarRegistro(JSON.parse(Buffer.concat(partes).toString('utf8')));
+    return { datos: JSON.parse(Buffer.concat(partes).toString('utf8')) };
   } catch (error) {
     if (!(error instanceof SyntaxError)) throw error;
-    responder(res, 400, { mensaje: 'El JSON del registro no es válido.' });
+    responder(res, 400, { mensaje: 'El JSON de la solicitud no es válido.' });
   }
 }
 
-export function crearServidor(registro, despliegueHabilitado = false, monitor = null) {
+export function crearServidor(registro, despliegueHabilitado = false, monitor = null, acceso = configurarAcceso()) {
   const contenidoEstatico = new Map(Array.from(archivos, ([ruta, [archivo, tipo]]) => [
     ruta, [readFileSync(new URL(`public/${archivo}`, import.meta.url)), tipo],
   ]));
+  const paginaAcceso = readFileSync(new URL('public/acceso.html', import.meta.url));
 
   return createServer(async (req, res) => {
     try {
@@ -63,15 +66,32 @@ export function crearServidor(registro, despliegueHabilitado = false, monitor = 
       }
 
       const { pathname, searchParams } = new URL(req.url, 'http://localhost');
+      const operador = acceso.operador(req);
+      if (req.method === 'GET' && pathname === '/' && !operador) {
+        return responder(res, 200, paginaAcceso, 'text/html');
+      }
       if (req.method === 'GET' && contenidoEstatico.has(pathname)) {
         const [contenido, tipo] = contenidoEstatico.get(pathname);
         return responder(res, 200, contenido, tipo);
       }
-      if (req.method === 'GET' && pathname === '/api/catalogo') {
-        return responder(res, 200, { ...catalogo, despliegueHabilitado, observabilidadHabilitada: Boolean(monitor) });
-      }
       if (req.method === 'GET' && pathname === '/metrics' && monitor) {
         return responder(res, 200, monitor.leer(), 'text/plain; version=0.0.4');
+      }
+      if (req.method === 'POST' && pathname === '/api/sesion') {
+        const solicitud = await leerJson(req, res);
+        if (!solicitud) return;
+        const estado = await acceso.ingresar(req, res, solicitud.datos);
+        return responder(res, estado, estado === 200 ? { activa: true } : {
+          mensaje: estado === 429 ? 'Espera un segundo antes de reintentar.' : 'Usuario o contraseña incorrectos.',
+        });
+      }
+      if (!operador) return responder(res, 401, { mensaje: 'Inicia sesión en el panel.' });
+      if (req.method === 'POST' && pathname === '/api/salir') {
+        acceso.salir(req, res);
+        return responder(res, 200, { activa: false });
+      }
+      if (req.method === 'GET' && pathname === '/api/catalogo') {
+        return responder(res, 200, { ...catalogo, despliegueHabilitado, observabilidadHabilitada: Boolean(monitor) });
       }
       if (req.method === 'GET' && pathname === '/api/alertas' && monitor) {
         const activas = monitor.alertas.activas();
@@ -89,13 +109,13 @@ export function crearServidor(registro, despliegueHabilitado = false, monitor = 
         return responder(res, 200, registro.listar(filtros));
       }
       if (req.method === 'POST' && pathname === '/api/tenants') {
-        const validacion = await leerRegistro(req, res);
-        if (!validacion) return;
-        const { errores, datos } = validacion;
+        const solicitud = await leerJson(req, res);
+        if (!solicitud) return;
+        const { errores, datos } = validarRegistro(solicitud.datos);
         if (Object.keys(errores).length) {
           return responder(res, 422, { mensaje: 'Revisa los datos del formulario.', errores });
         }
-        const tenant = registro.crear(datos);
+        const tenant = registro.crear(datos, operador);
         if (!tenant) {
           return responder(res, 409, {
             mensaje: 'El identificador ya está registrado.',
@@ -103,6 +123,10 @@ export function crearServidor(registro, despliegueHabilitado = false, monitor = 
           });
         }
         return responder(res, 201, tenant);
+      }
+      const rutaAuditoria = pathname.match(/^\/api\/tenants\/([a-z0-9-]{3,40})\/auditoria$/);
+      if (req.method === 'GET' && rutaAuditoria) {
+        return responder(res, 200, registro.auditoria(rutaAuditoria[1]));
       }
       const rutaDespliegues = pathname.match(/^\/api\/tenants\/([a-z0-9-]{3,40})\/(despliegues|suspender|reanudar|preparar-retiro|(?:retirar|cancelar-retiro)\/[1-9][0-9]*)$/);
       if (rutaDespliegues && (req.method === 'POST' || (req.method === 'GET' && rutaDespliegues[2] === 'despliegues'))) {
@@ -115,13 +139,13 @@ export function crearServidor(registro, despliegueHabilitado = false, monitor = 
         }
         const [accion, revision] = rutaDespliegues[2].split('/');
         if (accion === 'cancelar-retiro') {
-          if (!registro.cancelarRetiro(tenant.identificador, Number(revision))) {
+          if (!registro.cancelarRetiro(tenant.identificador, Number(revision), operador)) {
             return responder(res, 409, { mensaje: 'La revisión de retiro ya no está disponible.' });
           }
           return responder(res, 200, { mensaje: 'Se canceló el retiro.' });
         }
         const tipo = accion === 'despliegues' ? 'desplegar' : accion;
-        const trabajo = registro.encolar(tenant.identificador, tipo, Number(revision));
+        const trabajo = registro.encolar(tenant.identificador, tipo, Number(revision), operador);
         if (!trabajo) return responder(res, 409, { mensaje: 'El estado actual del tenant no permite esta operación.' });
         return responder(res, 202, trabajo);
       }
@@ -134,13 +158,15 @@ export function crearServidor(registro, despliegueHabilitado = false, monitor = 
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
+  const acceso = configurarAcceso();
+  delete process.env.PFM2_ADMIN_CLAVE;
   const rutaDb = process.env.TENANTS_DB ?? fileURLToPath(new URL('data/tenants.sqlite', import.meta.url));
   mkdirSync(dirname(rutaDb), { recursive: true });
   const registro = abrirRegistro(rutaDb);
   const puerto = Number(process.env.PORT ?? 4173);
   const config = configurarDespliegue();
   const monitor = config && process.env.PFM2_MONITORING === '1' ? iniciarMonitor(registro, config) : null;
-  const servidor = crearServidor(registro, Boolean(config), monitor);
+  const servidor = crearServidor(registro, Boolean(config), monitor, acceso);
   const detener = config && iniciarTrabajador(registro, resolve(dirname(rutaDb), 'despliegues'),
     (trabajo) => ejecutarOperacionAws({ ...trabajo, config }));
   servidor.once('close', async () => {

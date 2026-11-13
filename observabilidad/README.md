@@ -12,7 +12,7 @@ En **Tenants → Monitoreo → Eventos recientes** se muestran hasta 50 deteccio
 
 Descarga los archivos de Windows y extráelos en `observabilidad/data/herramientas/prometheus` y `observabilidad/data/herramientas/grafana`. Conserva una sola versión de cada herramienta en esos directorios. [Prometheus 3.16.0](https://github.com/prometheus/prometheus/releases/tag/v3.16.0) · [Grafana OSS 13.2.1](https://grafana.com/grafana/download/13.2.1?edition=oss&platform=windows).
 
-Abre tres terminales PowerShell desde la raíz del repositorio. En la primera, configura el [perfil de despliegue de AWS](../plataforma/README.md#despliegue-desde-el-panel), cierra cualquier ejecución anterior del panel y arráncalo en su puerto predeterminado.
+Abre tres terminales PowerShell desde la raíz del repositorio. En la primera, configura las credenciales del administrador local y el perfil de despliegue de AWS. Cierra cualquier ejecución anterior y arranca el panel en su puerto predeterminado. Prometheus consulta `/metrics` localmente sin iniciar sesión. [Configuración del panel](../plataforma/README.md#ejecutar-en-local).
 
 ```powershell
 $env:PFM2_MONITORING = '1'

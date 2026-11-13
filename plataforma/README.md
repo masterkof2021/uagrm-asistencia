@@ -4,17 +4,27 @@ El panel local permite elegir entre tres planes, registrar una institución y co
 
 ## Ejecutar en local
 
-Requiere Node.js 24 o posterior. Desde la raíz del repositorio ejecuta:
+Requiere Node.js 24 o posterior. Elige un usuario para el administrador del panel y una contraseña de 12 a 256 caracteres. Desde la raíz del repositorio, introduce la contraseña con el indicador de PowerShell.
 
 ```powershell
-npm.cmd --prefix plataforma start
+$env:PFM2_ADMIN_USUARIO = 'operador'
+$env:PFM2_ADMIN_CLAVE = [Net.NetworkCredential]::new('', (Read-Host 'Contraseña del panel' -AsSecureString)).Password
+try {
+  npm.cmd --prefix plataforma start
+} finally {
+  Remove-Item Env:PFM2_ADMIN_CLAVE -ErrorAction SilentlyContinue
+}
 ```
 
-Abre [http://127.0.0.1:4173](http://127.0.0.1:4173). El servicio escucha únicamente en la interfaz local. Los registros se guardan en `plataforma/data/tenants.sqlite`, fuera de Git. Las variables `PORT` y `TENANTS_DB` permiten seleccionar otro puerto o ruta de SQLite.
+Abre el panel e inicia sesión. La sesión vence a las ocho horas o al reiniciar el proceso. El servicio escucha únicamente en la interfaz local. Los registros y la auditoría se guardan en `plataforma/data/tenants.sqlite`, fuera de Git. Las variables `PORT` y `TENANTS_DB` permiten seleccionar otro puerto o ruta de SQLite. [Panel local](http://127.0.0.1:4173)
+
+En **Tenants → Ver historial**, la sección **Actividad del operador** muestra quién registró el tenant o solicitó cada operación, su fecha en Bolivia y el número de trabajo cuando corresponde. La atribución se registra desde la instalación de esta versión.
 
 Selecciona un plan y comprueba la memoria y el almacenamiento de las tres capas en el resumen. El entorno inicial es **Pruebas** y el motor inicial es **OpenTofu**. Las capacidades y los límites de estudiantes del catálogo son valores iniciales para la demo. El estado **Registrado** indica que el tenant está pendiente de aprovisionamiento. El panel está diseñado para un operador en su equipo local.
 
 ## Despliegue desde el panel
+
+Configura primero las credenciales locales del panel en la misma terminal.
 
 Para probar el arranque con Ansible, inicia el panel con `PFM2_ANSIBLE=1` y `PFM2_AMI_ID` apuntando a la AMI privada de Packer. Registra un tenant nuevo para el ensayo. El panel fija el modo de arranque y la imagen en el directorio del tenant y los incluye en el historial al verificar los servicios. [Construcción de la AMI](../infra/packer/README.md).
 
@@ -57,6 +67,12 @@ En Windows, instala los binarios verificados desde la raíz del repositorio con 
 Abre **Tenants → Ver historial** para consultar fecha en Bolivia, herramienta, versión, alcance, conteo y códigos de reglas por intento. Los hallazgos son informativos. Un error al ejecutar cualquiera de las herramientas detiene el intento antes de aplicar y el historial conserva los resultados obtenidos. [Formatos de IaC de Trivy](https://trivy.dev/docs/latest/coverage/iac/).
 
 ## API local
+
+Para automatizar operaciones, inicia sesión con `POST /api/sesion` enviando `usuario` y `clave` como JSON. Conserva la cookie de sesión para las demás llamadas y cierra la sesión con `POST /api/salir`. Prometheus consulta `GET /metrics` desde el equipo local sin cookie.
+
+| Ruta de auditoría | Operación |
+| --- | --- |
+| `GET /api/tenants/<tenant>/auditoria` | Consultar la actividad atribuida al operador. |
 
 | Método y ruta | Operación |
 | --- | --- |

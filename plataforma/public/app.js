@@ -35,6 +35,7 @@ async function api(ruta, opciones) {
   const respuesta = await fetch(ruta, opciones);
   const contenido = await respuesta.json();
   if (!respuesta.ok) {
+    if (respuesta.status === 401) location.reload();
     const error = new Error(contenido.mensaje);
     error.campos = contenido.errores;
     throw error;
@@ -125,12 +126,10 @@ function filaTenant(tenant) {
     boton.addEventListener('click', () => mostrarRetiro(tenant, boton));
     accion.append(boton);
   }
-  if (tenant.fase_despliegue) {
-    const boton = nodo('button', 'Ver historial', 'secundario');
-    boton.type = 'button';
-    boton.addEventListener('click', () => mostrarHistorial(tenant));
-    accion.append(boton);
-  }
+  const historial = nodo('button', 'Ver historial', 'secundario');
+  historial.type = 'button';
+  historial.addEventListener('click', () => mostrarHistorial(tenant));
+  accion.append(historial);
   fila.append(
     institucion,
     nodo('td', tenant.plan.nombre),
@@ -149,7 +148,8 @@ async function mostrarHistorial(tenant) {
   detalle.replaceChildren(nodo('p', 'Cargando historial…'));
   dialogo.showModal();
   try {
-    const historial = await api(`/api/tenants/${tenant.identificador}/despliegues`);
+    const ruta = `/api/tenants/${tenant.identificador}`;
+    const [historial, auditoria] = await Promise.all([api(`${ruta}/despliegues`), api(`${ruta}/auditoria`)]);
     const intentos = historial.filter(({ tipo }) => tipo === 'desplegar');
     const nombres = { trivy: 'Trivy', gitleaks: 'Gitleaks', conftest: 'Conftest' };
     detalle.replaceChildren(...intentos.map((intento) => {
@@ -169,6 +169,15 @@ async function mostrarHistorial(tenant) {
       return seccion;
     }));
     if (!intentos.length) detalle.append(nodo('p', 'Esta institución todavía no tiene intentos de despliegue.'));
+    const actividad = nodo('ul');
+    const acciones = { registrar: 'Registro', desplegar: 'Despliegue', suspender: 'Suspensión', reanudar: 'Reanudación',
+      'preparar-retiro': 'Preparación del retiro', retirar: 'Confirmación del retiro', 'cancelar-retiro': 'Cancelación del retiro' };
+    for (const evento of auditoria) {
+      const trabajo = evento.trabajo_id ? ` · Operación ${evento.trabajo_id}` : '';
+      actividad.append(nodo('li', `${acciones[evento.accion]} · ${evento.operador} · ${fechaAlerta.format(new Date(evento.fecha))}${trabajo}`));
+    }
+    detalle.append(nodo('h3', 'Actividad del operador'),
+      actividad.childElementCount ? actividad : nodo('p', 'Sin actividad atribuida a un operador.'));
   } catch {
     detalle.replaceChildren(nodo('p', 'No se pudo consultar el historial.'));
   }
@@ -387,6 +396,14 @@ filtros.addEventListener('submit', (evento) => {
   if (catalogo) cargarTenants();
 });
 window.addEventListener('hashchange', cambiarVista);
+porId('salir').addEventListener('click', async () => {
+  try {
+    await api('/api/salir', { method: 'POST' });
+    location.reload();
+  } catch {
+    alert('No se pudo cerrar la sesión. Intenta de nuevo.');
+  }
+});
 cambiarVista();
 
 try {

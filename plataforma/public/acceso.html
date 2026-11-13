@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="es-BO">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Iniciar sesión | UAGRM Asistencia</title>
+  <link rel="stylesheet" href="/styles.css">
+  <script type="module" src="/acceso.js"></script>
+</head>
+<body class="pagina-acceso">
+  <main class="panel acceso">
+    <div class="marca"><span class="monograma" aria-hidden="true">A</span><span>Asistencia UAGRM</span></div>
+    <h1>Iniciar sesión</h1>
+    <form id="acceso" method="post" action="/api/sesion">
+      <label>Usuario del panel <input name="usuario" autocomplete="username" maxlength="64" required autofocus></label>
+      <label>Contraseña <input name="clave" type="password" autocomplete="current-password" maxlength="256" required></label>
+      <p id="error-acceso" role="alert"></p>
+      <button type="submit" class="primario">Ingresar</button>
+    </form>
+  </main>
+</body>
+</html>

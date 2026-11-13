@@ -74,6 +74,15 @@ export function abrirRegistro(ruta) {
     );
     CREATE INDEX IF NOT EXISTS alertas_por_deteccion ON alertas (deteccion);
     CREATE INDEX IF NOT EXISTS alertas_por_resolucion ON alertas (resuelta);
+    CREATE TABLE IF NOT EXISTS auditoria (
+      id INTEGER PRIMARY KEY,
+      tenant_id TEXT NOT NULL REFERENCES tenants(identificador),
+      operador TEXT NOT NULL,
+      accion TEXT NOT NULL,
+      trabajo_id INTEGER REFERENCES despliegues(id),
+      fecha TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS auditoria_por_tenant ON auditoria (tenant_id, id DESC);
   `);
   transaccion(() => {
     const columnas = db.prepare("PRAGMA table_info(despliegues)").all();
@@ -152,6 +161,12 @@ export function abrirRegistro(ruta) {
     RETURNING tenant_id
   `);
   const fecha = () => new Date().toISOString();
+  const registrarAuditoria = db.prepare(
+    'INSERT INTO auditoria (tenant_id, operador, accion, trabajo_id, fecha) VALUES (?, ?, ?, ?, ?)',
+  );
+  const consultarAuditoria = db.prepare(
+    'SELECT operador, accion, trabajo_id, fecha FROM auditoria WHERE tenant_id = ? ORDER BY id DESC',
+  );
   const guardarAlerta = db.prepare(`
     INSERT INTO alertas (clave, alerta, tenant, entorno, rol, severidad, mensaje, deteccion)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -184,12 +199,14 @@ export function abrirRegistro(ruta) {
   }
 
   return {
-    crear({ identificador, nombre, correo, entorno, motor, plan }) {
-      const fila = insertar.get(
-        identificador, nombre, correo, entorno, plan.id, JSON.stringify(plan),
-        motor, catalogo.region, new Date().toISOString(),
-      );
-      return fila ? leerTenant(fila) : null;
+    crear({ identificador, nombre, correo, entorno, motor, plan }, operador) {
+      return transaccion(() => {
+        const ahora = fecha();
+        const fila = insertar.get(identificador, nombre, correo, entorno, plan.id, JSON.stringify(plan),
+          motor, catalogo.region, ahora);
+        if (fila && operador) registrarAuditoria.run(identificador, operador, 'registrar', null, ahora);
+        return fila ? leerTenant(fila) : null;
+      });
     },
     listar({ buscar = '', entorno = '', plan = '', estado = '' } = {}) {
       return listar.all(buscar, buscar, buscar, entorno, entorno, plan, plan, estado, estado).map(leerTenant);
@@ -215,7 +232,7 @@ export function abrirRegistro(ruta) {
       const desde = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
       return eventosAlertas.all(desde, desde);
     },
-    encolar(identificador, tipo = 'desplegar', revision) {
+    encolar(identificador, tipo = 'desplegar', revision, operador) {
       return transaccion(() => {
         const tenant = porId.get(identificador);
         const permitido = new Map([['desplegar', 'registrado'], ['suspender', 'listo'], ['reanudar', 'suspendido']]);
@@ -230,16 +247,20 @@ export function abrirRegistro(ruta) {
                    !(tenant.estado === 'error' && ultimo === tipo))) return;
         if (tipo !== 'desplegar' && !ultimaSalida.get(identificador)) return;
         const trabajo = encolar.get(identificador, tipo, tenant.estado, fecha());
-        if (trabajo) actualizarTenant.run('en-cola', identificador);
+        if (trabajo) {
+          actualizarTenant.run('en-cola', identificador);
+          if (operador) registrarAuditoria.run(identificador, operador, tipo, trabajo.id, trabajo.actualizado);
+        }
         return trabajo;
       });
     },
-    cancelarRetiro(identificador, revision) {
+    cancelarRetiro(identificador, revision, operador) {
       return transaccion(() => {
         const vista = vistaPrevia.get(identificador);
         if (porId.get(identificador)?.estado !== 'retiro-pendiente' || vista?.id !== revision) return false;
         cerrarVista.run('cancelado', 'Se canceló el retiro.', fecha(), revision);
         actualizarTenant.run(vista.estado_anterior, identificador);
+        if (operador) registrarAuditoria.run(identificador, operador, 'cancelar-retiro', revision, fecha());
         return true;
       });
     },
@@ -259,6 +280,7 @@ export function abrirRegistro(ruta) {
         escaneos: trabajo.escaneos ? JSON.parse(trabajo.escaneos) : [],
       }));
     },
+    auditoria: (identificador) => consultarAuditoria.all(identificador),
     obtenerInfraestructura(identificador) {
       const fila = ultimaSalida.get(identificador);
       return fila ? JSON.parse(fila.salida) : null;

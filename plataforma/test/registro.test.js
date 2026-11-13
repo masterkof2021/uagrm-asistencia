@@ -9,6 +9,7 @@ import { setTimeout as esperar } from 'node:timers/promises';
 import { cambiarEstadoEc2, configurarDespliegue, desplegarHcl, gestionarRetiro, iniciarTrabajador, seleccionarAmi } from '../despliegues.js';
 import { catalogo } from '../catalogo.js';
 import { consultarAlertas, iniciarHistorialAlertas } from '../alertas.js';
+import { configurarAcceso } from '../acceso.js';
 import { crearServidor } from '../server.js';
 import { abrirRegistro } from '../tenants.js';
 
@@ -21,23 +22,65 @@ const solicitud = {
   motor: 'opentofu',
 };
 
-async function iniciar(registro, despliegueHabilitado, monitor) {
-  const servidor = crearServidor(registro, despliegueHabilitado, monitor);
+const administrador = { usuario: 'operador-pruebas', clave: 'clave local de pruebas' };
+
+async function iniciar(registro, despliegueHabilitado, monitor, autenticar = true) {
+  const acceso = configurarAcceso({
+    PFM2_ADMIN_USUARIO: administrador.usuario, PFM2_ADMIN_CLAVE: administrador.clave,
+  });
+  const servidor = crearServidor(registro, despliegueHabilitado, monitor, acceso);
   servidor.listen(0, '127.0.0.1');
   await once(servidor, 'listening');
+  const url = `http://127.0.0.1:${servidor.address().port}`;
+  const sesion = autenticar ? await ingresar(url, administrador) : null;
+  const cookie = sesion?.headers.get('set-cookie')?.split(';')[0];
   return {
-    url: `http://127.0.0.1:${servidor.address().port}`,
+    url,
+    pedir: (ruta, opciones = {}) => fetch(ruta, { ...opciones, headers: { Cookie: cookie, ...opciones.headers } }),
     cerrar: () => new Promise((resolve, reject) => servidor.close((error) => error ? reject(error) : resolve())),
   };
 }
 
-function registrar(url, datos, opciones = {}) {
-  return fetch(`${url}/api/tenants`, {
+function registrar(pedir, url, datos, opciones = {}) {
+  return pedir(`${url}/api/tenants`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...opciones },
     body: JSON.stringify(datos),
   });
 }
+
+function ingresar(url, datos) {
+  return fetch(`${url}/api/sesion`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(datos),
+  });
+}
+
+test('exige sesión para operar, atribuye el registro y despliegue y mantiene métricas locales', async (t) => {
+  const registro = abrirRegistro(':memory:');
+  const { url, cerrar } = await iniciar(registro, true, { leer: () => 'pfm2_demo 1\n' }, false);
+  t.after(async () => { await cerrar(); registro.cerrar(); });
+  assert.match(await (await fetch(url)).text(), /Iniciar sesión/);
+  assert.equal((await fetch(`${url}/api/tenants`)).status, 401);
+  assert.equal((await registrar(fetch, url, solicitud)).status, 401);
+  assert.equal(await (await fetch(`${url}/metrics`)).text(), 'pfm2_demo 1\n');
+  const sesion = await ingresar(url, administrador);
+  assert.equal(sesion.status, 200);
+  const cabecera = sesion.headers.get('set-cookie');
+  assert.match(cabecera, /HttpOnly; SameSite=Strict/);
+  const Cookie = cabecera.split(';')[0];
+  assert.match(await (await fetch(url, { headers: { Cookie } })).text(), /Cerrar sesión/);
+  assert.equal((await registrar(fetch, url, { ...solicitud, operador: 'falso' }, { Cookie })).status, 201);
+  const ruta = `${url}/api/tenants/${solicitud.identificador}`;
+  const despliegue = await fetch(`${ruta}/despliegues`, { method: 'POST', headers: { Cookie } });
+  assert.equal(despliegue.status, 202);
+  const trabajo = await despliegue.json();
+  const actividad = await (await fetch(`${ruta}/auditoria`, { headers: { Cookie } })).json();
+  assert.deepEqual(actividad.map(({ accion, operador, trabajo_id }) => [accion, operador, trabajo_id]), [
+    ['desplegar', administrador.usuario, trabajo.id], ['registrar', administrador.usuario, null],
+  ]);
+  assert.equal((await fetch(`${url}/api/salir`, { method: 'POST', headers: { Cookie } })).status, 200);
+  assert.equal((await fetch(`${ruta}/auditoria`, { headers: { Cookie } })).status, 401);
+});
 
 test('registra detecciones y resoluciones sin duplicarlas ni cerrar alertas cuando falla Prometheus', async (t) => {
   const directorio = await mkdtemp(join(tmpdir(), 'pfm2-alertas-'));
@@ -64,7 +107,7 @@ test('registra detecciones y resoluciones sin duplicarlas ni cerrar alertas cuan
   const alertas = iniciarHistorialAlertas(registro, {
     consultar: () => consultarAlertas(`http://127.0.0.1:${prometheus.address().port}`), intervalo: 25,
   });
-  const { url, cerrar } = await iniciar(registro, false, { alertas });
+  const { url, cerrar, pedir } = await iniciar(registro, false, { alertas });
   let registroCerrado = false;
   t.after(async () => {
     await alertas.detener();
@@ -75,7 +118,7 @@ test('registra detecciones y resoluciones sin duplicarlas ni cerrar alertas cuan
   });
   async function resumenCuando(condicion) {
     for (let intento = 0; intento < 100; intento++) {
-      const respuesta = await fetch(`${url}/api/alertas/resumen`);
+      const respuesta = await pedir(`${url}/api/alertas/resumen`);
       assert.equal(respuesta.status, 200);
       const resumen = await respuesta.json();
       if (condicion(resumen)) return resumen;
@@ -87,14 +130,14 @@ test('registra detecciones y resoluciones sin duplicarlas ni cerrar alertas cuan
   const primera = await resumenCuando(({ activas }) => activas?.length === 1 && lecturas >= 3);
   assert.deepEqual(primera.eventos.map(({ evento, deteccion, tenant }) => [evento, deteccion, tenant]),
     [['detectada', deteccion, 'san-marcos']]);
-  assert.equal((await (await fetch(`${url}/api/alertas`)).json())[0].alerta, 'ServicioCaido');
+  assert.equal((await (await pedir(`${url}/api/alertas`)).json())[0].alerta, 'ServicioCaido');
 
   grupos = [];
   const sinDatos = await resumenCuando(({ fuente }) => fuente === 'sin-datos');
   assert.equal(sinDatos.activas, null);
   assert.ok(sinDatos.ultimaConsulta);
   assert.deepEqual(sinDatos.eventos, primera.eventos);
-  assert.equal((await fetch(`${url}/api/alertas`)).status, 503);
+  assert.equal((await pedir(`${url}/api/alertas`)).status, 503);
 
   grupos = [{ name: 'uagrm-tenants', rules: [{ health: 'ok', alerts: [] }] }];
   const resuelta = await resumenCuando(({ eventos }) => eventos[0]?.evento === 'resuelta');
@@ -119,20 +162,20 @@ test('registra detecciones y resoluciones sin duplicarlas ni cerrar alertas cuan
 
 test('ofrece el catálogo, valida los campos y registra un identificador único ante solicitudes simultáneas', async (t) => {
   const registro = abrirRegistro(':memory:');
-  const { url, cerrar } = await iniciar(registro);
+  const { url, cerrar, pedir } = await iniciar(registro);
   t.after(async () => { await cerrar(); registro.cerrar(); });
 
-  const catalogo = await (await fetch(`${url}/api/catalogo`)).json();
+  const catalogo = await (await pedir(`${url}/api/catalogo`)).json();
   assert.equal(catalogo.region, 'us-east-2');
   assert.deepEqual(catalogo.planes.map(({ id }) => id), ['basico', 'estandar', 'avanzado']);
 
-  const invalido = await registrar(url, { ...solicitud, identificador: '../foo', plan: 'inexistente' });
+  const invalido = await registrar(pedir, url, { ...solicitud, identificador: '../foo', plan: 'inexistente' });
   assert.equal(invalido.status, 422);
   assert.deepEqual(Object.keys((await invalido.json()).errores), ['identificador', 'plan']);
 
   const respuestas = await Promise.all([
-    registrar(url, solicitud),
-    registrar(url, { ...solicitud, identificador: ' SAN-MARCOS ' }),
+    registrar(pedir, url, solicitud),
+    registrar(pedir, url, { ...solicitud, identificador: ' SAN-MARCOS ' }),
   ]);
   assert.deepEqual(respuestas.map(({ status }) => status).sort(), [201, 409]);
   const nuevo = await respuestas.find(({ status }) => status === 201).json();
@@ -140,14 +183,14 @@ test('ofrece el catálogo, valida los campos y registra un identificador único 
   assert.equal(nuevo.identificador, 'san-marcos');
   assert.equal(nuevo.plan.recursos.find(({ rol }) => rol === 'MySQL').discoGiB, 32);
 
-  const origenAjeno = await registrar(url, { ...solicitud, identificador: 'otro' }, { Origin: 'https://example.org' });
+  const origenAjeno = await registrar(pedir, url, { ...solicitud, identificador: 'otro' }, { Origin: 'https://example.org' });
   assert.equal(origenAjeno.status, 403);
   assert.equal(registro.listar().length, 1);
 });
 
 test('la API encola un despliegue único y permite reintentar sin perder el historial', async (t) => {
   const registro = abrirRegistro(':memory:');
-  const { url, cerrar } = await iniciar(registro, true);
+  const { url, cerrar, pedir } = await iniciar(registro, true);
   let intentos = 0;
   const detener = iniciarTrabajador(registro, tmpdir(), async ({ tenant, progreso, guardarEscaneos }) => {
     assert.equal(tenant.identificador, solicitud.identificador);
@@ -159,15 +202,15 @@ test('la API encola un despliegue único y permite reintentar sin perder el hist
     return { instancias: { frontend: 'i-ejemplo' } };
   });
   t.after(async () => { await cerrar(); await detener(); registro.cerrar(); });
-  assert.equal((await registrar(url, solicitud)).status, 201);
+  assert.equal((await registrar(pedir, url, solicitud)).status, 201);
   const ruta = `${url}/api/tenants/${solicitud.identificador}/despliegues`;
-  const iniciarDespliegue = () => fetch(ruta, { method: 'POST' });
+  const iniciarDespliegue = () => pedir(ruta, { method: 'POST' });
   const respuestas = await Promise.all([iniciarDespliegue(), iniciarDespliegue()]);
   assert.deepEqual(respuestas.map(({ status }) => status).sort(), [202, 409]);
 
   async function esperarEstado(estado) {
     for (let intento = 0; intento < 50; intento++) {
-      const historial = await (await fetch(ruta)).json();
+      const historial = await (await pedir(ruta)).json();
       if (historial[0]?.estado === estado) return historial;
       await esperar(100);
     }
@@ -192,8 +235,8 @@ test('conserva los tenants al reabrir SQLite y aplica filtros combinados', async
   const registro = abrirRegistro(ruta);
   const servidor = await iniciar(registro);
   try {
-    assert.equal((await registrar(servidor.url, solicitud)).status, 201);
-    assert.equal((await registrar(servidor.url, {
+    assert.equal((await registrar(servidor.pedir, servidor.url, solicitud)).status, 201);
+    assert.equal((await registrar(servidor.pedir, servidor.url, {
       ...solicitud, nombre: 'Instituto Central', identificador: 'central', plan: 'basico', entorno: 'produccion',
     })).status, 201);
   } finally {
@@ -202,11 +245,11 @@ test('conserva los tenants al reabrir SQLite y aplica filtros combinados', async
   }
 
   const reabierto = abrirRegistro(ruta);
-  const { url, cerrar } = await iniciar(reabierto);
+  const { url, cerrar, pedir } = await iniciar(reabierto);
   try {
-    const resultado = await (await fetch(`${url}/api/tenants?buscar=marcos&plan=estandar&entorno=pruebas&estado=registrado`)).json();
+    const resultado = await (await pedir(`${url}/api/tenants?buscar=marcos&plan=estandar&entorno=pruebas&estado=registrado`)).json();
     assert.deepEqual(resultado.map(({ identificador }) => identificador), ['san-marcos']);
-    const vacio = await (await fetch(`${url}/api/tenants?buscar=marcos&entorno=produccion`)).json();
+    const vacio = await (await pedir(`${url}/api/tenants?buscar=marcos&entorno=produccion`)).json();
     assert.deepEqual(vacio, []);
   } finally {
     await cerrar();
@@ -268,7 +311,7 @@ test('OpenTofu usa el estado del tenant y detiene un plan que reemplaza una inst
 
 test('suspende y reanuda las EC2 registradas conservando sus discos después de una suspensión parcial', async (t) => {
   const registro = abrirRegistro(':memory:');
-  const { url, cerrar } = await iniciar(registro, true);
+  const { url, cerrar, pedir } = await iniciar(registro, true);
   const roles = ['frontend', 'backend', 'database'];
   const instancias = Object.fromEntries(roles.map((rol, i) => [rol, `i-0000000${i}`]));
   const volumenes = Object.fromEntries(roles.map((rol, i) => [rol, `vol-0000000${i}`]));
@@ -315,7 +358,7 @@ test('suspende y reanuda las EC2 registradas conservando sus discos después de 
     }
     assert.fail(`Operación inesperada: ${servicio} ${accion}`);
   }
-  assert.equal((await registrar(url, solicitud)).status, 201);
+  assert.equal((await registrar(pedir, url, solicitud)).status, 201);
   registro.encolar(solicitud.identificador);
   registro.actualizar(registro.reclamar().id, 'listo', 'Prueba inicial.', { instancias, volumenes });
   const detener = iniciarTrabajador(registro, tmpdir(), (trabajo) =>
@@ -323,10 +366,10 @@ test('suspende y reanuda las EC2 registradas conservando sus discos después de 
   t.after(async () => { await cerrar(); await detener(); registro.cerrar(); });
 
   const ruta = `${url}/api/tenants/${solicitud.identificador}`;
-  const operacion = (tipo) => fetch(`${ruta}/${tipo}`, { method: 'POST' });
+  const operacion = (tipo) => pedir(`${ruta}/${tipo}`, { method: 'POST' });
   async function esperarEstado(estado) {
     for (let intento = 0; intento < 50; intento++) {
-      const [trabajo] = await (await fetch(`${ruta}/despliegues`)).json();
+      const [trabajo] = await (await pedir(`${ruta}/despliegues`)).json();
       if (trabajo.estado === estado) return trabajo;
       if (trabajo.estado === 'error') assert.fail(trabajo.fase);
       await esperar(100);

@@ -1,0 +1,26 @@
+[
+  {
+    "id": "basico", "nombre": "Básico", "estudiantes": 100,
+    "recursos": [
+      { "rol": "Frontend", "instancia": "t3.micro", "memoriaGiB": 1, "discoGiB": 12 },
+      { "rol": "Backend", "instancia": "t3.micro", "memoriaGiB": 1, "discoGiB": 20 },
+      { "rol": "MySQL", "instancia": "t3.micro", "memoriaGiB": 1, "discoGiB": 20 }
+    ]
+  },
+  {
+    "id": "estandar", "nombre": "Estándar", "estudiantes": 1000,
+    "recursos": [
+      { "rol": "Frontend", "instancia": "t3.micro", "memoriaGiB": 1, "discoGiB": 12 },
+      { "rol": "Backend", "instancia": "t3.micro", "memoriaGiB": 1, "discoGiB": 20 },
+      { "rol": "MySQL", "instancia": "t3.small", "memoriaGiB": 2, "discoGiB": 32 }
+    ]
+  },
+  {
+    "id": "avanzado", "nombre": "Avanzado", "estudiantes": 5000,
+    "recursos": [
+      { "rol": "Frontend", "instancia": "t3.small", "memoriaGiB": 2, "discoGiB": 16 },
+      { "rol": "Backend", "instancia": "t3.medium", "memoriaGiB": 4, "discoGiB": 32 },
+      { "rol": "MySQL", "instancia": "t3.medium", "memoriaGiB": 4, "discoGiB": 64 }
+    ]
+  }
+]

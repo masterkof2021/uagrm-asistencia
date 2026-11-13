@@ -1,0 +1,11 @@
+{
+  "name": "pfm2-pulumi",
+  "version": "1.0.0",
+  "private": true,
+  "main": "index.cjs",
+  "engines": { "node": ">=24" },
+  "dependencies": {
+    "@pulumi/aws": "7.51.1",
+    "@pulumi/pulumi": "3.270.0"
+  }
+}

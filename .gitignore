@@ -14,3 +14,9 @@ tmp/
 *.pem
 *.key
 *_credentials.csv
+/plataforma/data/
+/observabilidad/data/
+/infra/opentofu/backend.tf
+/infra/opentofu/*.tfvars
+/infra/opentofu/*.tfvars.json
+/infra/.smoke-opentofu/

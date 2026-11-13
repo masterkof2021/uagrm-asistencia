@@ -1,0 +1,59 @@
+groups:
+  - name: uagrm-tenants
+    rules:
+      - alert: ColectorNoDisponible
+        expr: up{job="pfm2"} == 0 or pfm2_colector_ok == 0 or (time() - pfm2_colector_timestamp_seconds > 180)
+        for: 2m
+        labels:
+          severidad: advertencia
+        annotations:
+          resumen: El colector no entrega muestras recientes.
+      - alert: SondaNoDisponible
+        expr: (pfm2_muestra_up == 0) and on() (time() - pfm2_colector_timestamp_seconds < 180)
+        for: 2m
+        labels:
+          severidad: advertencia
+        annotations:
+          resumen: 'Sin respuesta de la sonda de {{ $labels.rol }}.'
+      - alert: ServicioCaido
+        expr: (pfm2_servicio_up == 0) and on() (time() - pfm2_colector_timestamp_seconds < 180)
+        for: 2m
+        labels:
+          severidad: critica
+        annotations:
+          resumen: 'El servicio {{ $labels.rol }} no responde.'
+      - alert: ApiNoDisponible
+        expr: (pfm2_api_up == 0) and on() (time() - pfm2_colector_timestamp_seconds < 180)
+        for: 2m
+        labels:
+          severidad: critica
+        annotations:
+          resumen: La API no responde correctamente a través de Nginx.
+      - alert: ErroresApiElevados
+        expr: (pfm2_api_errores_5m >= 5) and on() (time() - pfm2_colector_timestamp_seconds < 180)
+        for: 1m
+        labels:
+          severidad: advertencia
+        annotations:
+          resumen: La API devolvió al menos cinco errores 5xx en cinco minutos.
+      - alert: LatenciaApiAlta
+        expr: (pfm2_api_latencia_seconds > 1) and on() (time() - pfm2_colector_timestamp_seconds < 180)
+        for: 2m
+        labels:
+          severidad: advertencia
+        annotations:
+          resumen: La sonda de API tarda más de un segundo.
+      - alert: CpuAlta
+        expr: (pfm2_cpu_ratio > 0.85) and on() (time() - pfm2_colector_timestamp_seconds < 180)
+        for: 3m
+        labels:
+          severidad: advertencia
+        annotations:
+          resumen: 'CPU superior al 85 % en {{ $labels.rol }}.'
+      - alert: MemoriaAlta
+        expr: (pfm2_memoria_ratio > 0.85) and on() (time() - pfm2_colector_timestamp_seconds < 180)
+        for: 3m
+        labels:
+          severidad: advertencia
+        annotations:
+          resumen: 'Memoria superior al 85 % en {{ $labels.rol }}.'

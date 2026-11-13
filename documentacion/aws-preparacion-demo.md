@@ -1,6 +1,6 @@
 # Preparación de la demo en AWS Ohio
 
-La primera entrega se desarrolla en AWS `us-east-2`. La propuesta inicial usa OpenTofu como motor principal y CloudFormation como segunda implementación. El panel, Prometheus y Grafana pueden ejecutarse en local durante la demo. Cada tenant tiene su propio frontend, backend y MySQL, y los dos tenants de prueba usan datos ficticios.
+La primera entrega se desarrolla en AWS `us-east-2`. El panel admite OpenTofu, CloudFormation, Terraform y Pulumi. El panel, Prometheus y Grafana pueden ejecutarse en local durante la demo. Cada tenant tiene su propio frontend, backend y MySQL, y los dos tenants de prueba usan datos ficticios.
 
 ## Presupuesto mínimo de pruebas
 
@@ -31,9 +31,74 @@ La lista sirve para revisar el rol de despliegue contra el primer plan de OpenTo
 | Grafana y métricas | El Grafana local puede usar Prometheus para la demo. Si se añade CloudWatch, su lector necesita consultar métricas y, cuando se use, registros. | `logs:DescribeLogGroups` denegado. Prometheus local puede consultar los exportadores del tenant mediante acceso restringido. |
 | Packer, si se construye una AMI en AWS | El rol de construcción necesita lanzar y retirar la EC2 temporal y crear, etiquetar y retirar la AMI y los snapshots correspondientes. | Pendiente de validar cuando esté definida la construcción. |
 
-AWS también denegó la inspección de políticas adjuntas y `iam:SimulatePrincipalPolicy`. Los permisos de escritura de S3, parámetros privados y creación de pilas quedan pendientes hasta probar los recursos concretos con el perfil de despliegue. El perfil `default` devolvió un token inválido y `asistencia-deploy` tiene la sesión vencida.
+AWS también denegó la inspección de políticas adjuntas y `iam:SimulatePrincipalPolicy` a `pulumi-lab`.
 
-Para continuar con la verificación de despliegue, renueva la sesión y comprueba la identidad activa. [Inicio de sesión con AWS CLI](https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-sign-in.html).
+## Verificación con la sesión renovada
+
+El 12 de noviembre de 2026, `asistencia-deploy` se autenticó correctamente con el usuario raíz de la cuenta `masterkof`.
+
+- **Capacidad:** la cuota de EC2 Standard bajo demanda en Ohio es de 32 vCPU. AWS devolvió cero instancias en ejecución o pendientes. La demo requiere 12 vCPU.
+- **Simulaciones aprobadas:** creación de VPC y EBS gp3 cifrado, y lanzamiento de `t3.micro` y `t3.small` con el perfil EC2 de referencia.
+- **Lecturas confirmadas:** inventario de S3, metadatos de Parameter Store, CloudWatch Logs y validación de plantillas de CloudFormation.
+- **Planes de OpenTofu verificados:** Básico y Estándar dieron 30 altas por tenant en modo SSH, con tres EC2 y 52 o 64 GiB de EBS respectivamente. [Módulo de OpenTofu](../infra/opentofu/README.md).
+
+## Prueba de despliegue con OpenTofu
+
+Se desplegó `smoke-basico` en Ohio con la sesión temporal de `asistencia-deploy`. El modo Systems Manager creó 31 recursos, incluidas tres EC2 `t3.micro`, y permitió comprobar los servicios sin abrir SSH. Nginx devolvió HTTP 200 en la portada y HTTP 401 en la API sin sesión. También pasaron el inicio de sesión de administrador y la consulta de MySQL.
+
+El bucket `pfm2-state-487450071663-us-east-2` quedó privado, versionado y cifrado con SSE-S3. OpenTofu escribió el estado con bloqueo de S3 bajo `tenants/smoke-basico/terraform.tfstate`. Se comprobó que el estado carecía de los valores de las dos contraseñas de Parameter Store.
+
+OpenTofu retiró los 31 recursos de la prueba. Las consultas posteriores confirmaron cero EC2 activas, discos, VPC y parámetros de ese tenant. Se conserva el bucket con el historial de estado. Quedan pendientes el rol de despliegue para el panel y la validación de CloudFormation.
+
+## Rol de despliegue del panel
+
+CloudFormation ejecutó el conjunto aprobado `crear-rol-y-limite` de la pila `pfm2-panel-iam` en Ohio. La pila creó el rol `pfm2-panel-deploy` y el límite `pfm2-instance-boundary` para las instancias. El perfil local `pfm2-deploy` asumió el rol desde `pulumi-lab`, que usa el usuario IAM `pulumi-estudiante`.
+
+El panel registró y encoló un tenant temporal, generó el plan con estado en S3 y creó 19 recursos. AWS denegó `ssm:DescribeParameters` y la autorización de reglas de entrada y salida al crear reglas etiquetadas. OpenTofu retiró los 19 recursos con la sesión de preparación. AWS confirmó que la prueba quedó sin EC2 activas, VPC ni parámetros.
+
+CloudFormation ejecutó el conjunto aprobado `ajustar-permisos-opentofu`. El rol existente puede consultar metadatos de Parameter Store en Ohio y crear reglas de seguridad etiquetadas para el proyecto. [Plantilla de IAM](../infra/opentofu/panel-iam.yaml).
+
+La segunda prueba, `panel-ajuste-mwdghfdy`, llegó a **Operativo** desde el panel con el perfil `pfm2-deploy`. OpenTofu creó 31 recursos y el panel verificó Nginx, la API y MySQL mediante Systems Manager. La prueba conservó en el historial local los ID de las instancias y las versiones de la aplicación, la plantilla, OpenTofu y sus proveedores.
+
+El mismo perfil retiró los 31 recursos de la prueba. Las consultas de AWS confirmaron cero VPC, EC2 activas, discos y parámetros del tenant.
+
+CloudFormation aplicó el conjunto aprobado `suspender-y-reanudar-ec2`. El rol del panel puede detener y encender las EC2 etiquetadas para el proyecto y administradas por OpenTofu en Ohio.
+
+El panel desplegó, suspendió y reanudó el tenant temporal `panel-ciclo-mwdh5ll7` con el perfil `pfm2-deploy`. La prueba confirmó los mismos tres identificadores de EC2 y EBS al completar ambas operaciones. El panel volvió a verificar Nginx, la API y MySQL. Una consulta de MySQL devolvió el registro ficticio escrito antes de la suspensión.
+
+OpenTofu retiró los 31 recursos de la prueba con el rol dedicado. AWS confirmó cero VPC, EC2 activas, discos y parámetros de ese tenant.
+
+El panel probó el retiro con el tenant temporal `panel-retiro-mwdlli1i`. La primera revisión enumeró 31 recursos y tres discos EBS. Tras cancelarla, las tres EC2 seguían en ejecución. La API rechazó confirmar la revisión cancelada y aceptó la revisión vigente. OpenTofu retiró los 31 recursos y el panel verificó en AWS que no quedaran EC2 activas, discos EBS, VPC ni parámetros del tenant.
+
+## Prueba de observabilidad
+
+Con `pfm2-deploy`, el tenant temporal `panel-monitor-mwdnvmx0` entregó métricas de Nginx, Node.js y MySQL por Systems Manager. La primera verificación de la API agotó su tiempo mientras arrancaba MySQL. El reintento completó la verificación sobre las mismas instancias. El panel comprueba ahora MySQL y el backend antes de probar la API a través de Nginx.
+
+Grafana consultó CPU, memoria y disponibilidad de las tres instancias, además de latencia y errores 5xx. La detención controlada del backend produjo cinco respuestas 5xx. Grafana y la API del panel registraron la caída del servicio, la pérdida de disponibilidad de la API y el aumento de errores para el tenant de pruebas. Al reiniciar el backend se recuperó la API y se cerró la alerta de caída.
+
+El panel retiró los 31 recursos del tenant, incluidas las tres EC2 y sus discos raíz. AWS confirmó que no quedaban instancias activas, volúmenes EBS, VPC ni parámetros del tenant. [Guía de observabilidad](../observabilidad/README.md).
+
+## Prueba del motor CloudFormation
+
+Los conjuntos de cambios `agregar-motor-cloudformation` y `limitar-roles-cfn` ampliaron el rol dedicado del panel a las pilas `pfm2-cfn-*` de Ohio y al prefijo de roles y perfiles que usa ese motor. La primera pila temporal se detuvo al consultar un rol IAM antes de crearlo. Se retiró esa pila y el ajuste conservó el límite de permisos obligatorio para los roles de instancia.
+
+El panel reintentó el tenant Básico `panel-cfn-mwdrsixv` con `pfm2-deploy`. CloudFormation validó y ejecutó 25 altas. Systems Manager confirmó Nginx, la API y MySQL. La suspensión y reanudación conservaron las tres EC2, sus tres discos y el registro ficticio escrito antes de la suspensión.
+
+El panel mostró el inventario para revisar y ejecutó el retiro confirmado. AWS verificó la eliminación de la pila, las EC2, los discos y la VPC. La consulta a Secrets Manager confirmó que los dos secretos de prueba dejaron de estar activos. La plantilla usada pasó `cfn-lint` y las [reglas de seguridad del proyecto](../infra/cloudformation/seguridad.guard). [Guía de CloudFormation](../infra/cloudformation/README.md).
+
+## Pruebas de Terraform y Pulumi
+
+El conjunto `habilitar-terraform-y-pulumi` añadió al rol dedicado los permisos de ciclo de vida de EC2 para ambos motores y el borrado de bloqueos de Pulumi bajo su prefijo de S3.
+
+El tenant Estándar `panel-pulumi-mwdt8x3q` completó el despliegue, la suspensión, la reanudación y el retiro desde el panel. Conservó las mismas tres EC2 y los tres discos, y MySQL devolvió el registro ficticio escrito antes de suspender. La vista previa de reintento mostró cero cambios. La revisión del checkpoint en S3 confirmó que las credenciales de arranque estaban cifradas. [Guía de Pulumi](../infra/pulumi/README.md).
+
+El tenant Básico `panel-terraform-mwdt8x3p` encontró la cuota de ocho VPC de Ohio durante el primer intento simultáneo. Después de retirar Pulumi, Terraform reusó el mismo estado de S3, conservó 13 recursos y añadió los 18 restantes. También conservó las EC2, los discos y el registro de MySQL tras suspender y reanudar. Se comprobó que los valores de las credenciales no aparecían en el estado de Terraform cifrado en S3. [Guía de Terraform](../infra/terraform/README.md).
+
+AWS confirmó el retiro de 31 recursos y tres discos raíz en cada prueba. La demostración de aislamiento con dos tenants simultáneos requiere dos cupos disponibles de VPC en Ohio.
+
+La cuota aplicada de Ohio subió a nueve VPC. El ensayo posterior desplegó dos tenants simultáneos con OpenTofu, verificó su aislamiento y confirmó el retiro de ambos. [Guía y evidencia de la demo de aislamiento](demo-aislamiento.md).
+
+Para verificar la identidad de la CLI en otra sesión, consulta STS después de autenticarte. [Inicio de sesión con AWS CLI](https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-sign-in.html).
 
 ```powershell
 aws login --profile asistencia-deploy --region us-east-2

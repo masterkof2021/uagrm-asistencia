@@ -1,0 +1,261 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Rol del panel de tenants y limite de permisos de las instancias del proyecto.
+Metadata:
+  AWSToolsMetrics:
+    AWSAgentToolkit: aws-cloudformation@3
+Parameters:
+  OperatorArn:
+    Type: String
+    Description: ARN del usuario IAM del operador que asume el rol del panel.
+  StateBucket:
+    Type: String
+  SsmKeyArn:
+    Type: String
+    Description: ARN de la clave administrada aws/ssm en Ohio.
+Resources:
+  InstanceBoundary:
+    Type: AWS::IAM::ManagedPolicy
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Limita los permisos que pueden asumir las EC2 de ambos motores.
+        must: Restringir los secretos a rutas del proyecto.
+    Properties:
+      ManagedPolicyName: pfm2-instance-boundary
+      Path: /proyecto-final-modulo-2/
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action: ssm:GetParameter
+            Resource: !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/asistencia/proyecto-final-modulo-2/*
+          - Effect: Allow
+            Action: secretsmanager:GetSecretValue
+            Resource: !Sub arn:${AWS::Partition}:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:/asistencia/proyecto-final-modulo-2/*/cloudformation/*
+          - Effect: Allow
+            Action: kms:Decrypt
+            Resource: !Ref SsmKeyArn
+            Condition:
+              StringEquals:
+                kms:ViaService: !Sub ssm.${AWS::Region}.${AWS::URLSuffix}
+          - Effect: Allow
+            Action:
+              - ssm:UpdateInstanceInformation
+              - ssmmessages:CreateControlChannel
+              - ssmmessages:CreateDataChannel
+              - ssmmessages:OpenControlChannel
+              - ssmmessages:OpenDataChannel
+            Resource: '*'
+  PanelDeployRole:
+    Type: AWS::IAM::Role
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Autoriza el ciclo de vida y las verificaciones del panel.
+        must: Mantener CloudFormation limitado a pilas de tenants con prefijo pfm2-cfn.
+    Properties:
+      RoleName: pfm2-panel-deploy
+      Path: /proyecto-final-modulo-2/panel/
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS: !Ref OperatorArn
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: EstadoYPersistencia
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: s3:GetBucketLocation
+                Resource: !Sub arn:${AWS::Partition}:s3:::${StateBucket}
+              - Effect: Allow
+                Action: s3:ListBucket
+                Resource: !Sub arn:${AWS::Partition}:s3:::${StateBucket}
+                Condition:
+                  StringLike:
+                    s3:prefix: ['tenants/panel/*']
+              - Effect: Allow
+                Action: [s3:GetObject, s3:PutObject]
+                Resource: !Sub arn:${AWS::Partition}:s3:::${StateBucket}/tenants/panel/*
+              - Effect: Allow
+                Action: s3:DeleteObject
+                Resource:
+                  - !Sub arn:${AWS::Partition}:s3:::${StateBucket}/tenants/panel/*.tflock
+                  - !Sub arn:${AWS::Partition}:s3:::${StateBucket}/tenants/panel/pulumi/.pulumi/locks/*
+              - Effect: Allow
+                Action: ssm:GetParameter
+                Resource: !Sub arn:${AWS::Partition}:ssm:${AWS::Region}::parameter/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64
+              - Effect: Allow
+                Action: ssm:DescribeParameters
+                Resource: '*'
+                Condition:
+                  StringEquals:
+                    aws:RequestedRegion: !Ref AWS::Region
+              - Effect: Allow
+                Action: [ssm:GetParameter, ssm:PutParameter, ssm:DeleteParameter, ssm:AddTagsToResource, ssm:ListTagsForResource]
+                Resource: !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/asistencia/proyecto-final-modulo-2/*
+              - Effect: Allow
+                Action: [kms:Encrypt, kms:Decrypt]
+                Resource: !Ref SsmKeyArn
+                Condition:
+                  StringEquals:
+                    kms:ViaService: !Sub ssm.${AWS::Region}.${AWS::URLSuffix}
+        - PolicyName: InfraestructuraDelTenant
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ec2:Describe*
+                  - ec2:CreateVpc
+                  - ec2:CreateSubnet
+                  - ec2:CreateInternetGateway
+                  - ec2:CreateRouteTable
+                  - ec2:CreateSecurityGroup
+                  - ec2:RunInstances
+                Resource: '*'
+                Condition:
+                  StringEquals:
+                    aws:RequestedRegion: !Ref AWS::Region
+              - Effect: Allow
+                Action: ec2:CreateTags
+                Resource: '*'
+                Condition:
+                  StringEquals:
+                    aws:RequestedRegion: !Ref AWS::Region
+                    ec2:CreateAction: [CreateVpc, CreateSubnet, CreateInternetGateway, CreateRouteTable, CreateSecurityGroup, RunInstances, AuthorizeSecurityGroupIngress, AuthorizeSecurityGroupEgress]
+              - Effect: Allow
+                Action: ec2:CreateTags
+                Resource: '*'
+                Condition:
+                  StringEquals:
+                    aws:RequestedRegion: !Ref AWS::Region
+                    aws:ResourceTag/Project: proyecto-final-modulo-2
+              - Effect: Allow
+                Action: [ec2:AuthorizeSecurityGroupIngress, ec2:AuthorizeSecurityGroupEgress]
+                Resource: !Sub arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:security-group-rule/*
+                Condition:
+                  StringEquals:
+                    aws:RequestTag/Project: proyecto-final-modulo-2
+              - Effect: Allow
+                Action:
+                  - ec2:ModifyVpcAttribute
+                  - ec2:AttachInternetGateway
+                  - ec2:DetachInternetGateway
+                  - ec2:CreateRoute
+                  - ec2:DeleteRoute
+                  - ec2:AssociateRouteTable
+                  - ec2:DisassociateRouteTable
+                  - ec2:AuthorizeSecurityGroupIngress
+                  - ec2:AuthorizeSecurityGroupEgress
+                  - ec2:RevokeSecurityGroupIngress
+                  - ec2:RevokeSecurityGroupEgress
+                  - ec2:DeleteVpc
+                  - ec2:DeleteSubnet
+                  - ec2:DeleteInternetGateway
+                  - ec2:DeleteRouteTable
+                  - ec2:DeleteSecurityGroup
+                  - ec2:TerminateInstances
+                  - ec2:ModifyInstanceCreditSpecification
+                Resource: '*'
+                Condition:
+                  StringEquals:
+                    aws:RequestedRegion: !Ref AWS::Region
+                    aws:ResourceTag/Project: proyecto-final-modulo-2
+              - Effect: Allow
+                Action: [ec2:StartInstances, ec2:StopInstances]
+                Resource: !Sub arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:instance/*
+                Condition:
+                  StringEquals:
+                    aws:ResourceTag/Project: proyecto-final-modulo-2
+                    aws:ResourceTag/ManagedBy: [OpenTofu, CloudFormation, Terraform, Pulumi]
+              - Effect: Allow
+                Action: iam:CreateRole
+                Resource: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/proyecto-final-modulo-2/pfm2-*
+                Condition:
+                  StringEquals:
+                    iam:PermissionsBoundary: !Ref InstanceBoundary
+              - Effect: Allow
+                Action: [iam:TagRole, iam:GetRole, iam:DeleteRole, iam:ListRolePolicies, iam:ListAttachedRolePolicies, iam:ListInstanceProfilesForRole, iam:GetRolePolicy, iam:PutRolePolicy, iam:DeleteRolePolicy]
+                Resource: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/proyecto-final-modulo-2/pfm2-*
+              - Effect: Allow
+                Action: iam:PassRole
+                Resource: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/proyecto-final-modulo-2/pfm2-*
+                Condition:
+                  StringEquals:
+                    iam:PassedToService: ec2.amazonaws.com
+              - Effect: Allow
+                Action: [iam:CreateInstanceProfile, iam:GetInstanceProfile, iam:DeleteInstanceProfile, iam:TagInstanceProfile, iam:AddRoleToInstanceProfile, iam:RemoveRoleFromInstanceProfile]
+                Resource: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:instance-profile/proyecto-final-modulo-2/pfm2-*
+        - PolicyName: CloudFormationDelTenant
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - cloudformation:CreateChangeSet
+                  - cloudformation:DescribeChangeSet
+                  - cloudformation:DeleteChangeSet
+                  - cloudformation:ExecuteChangeSet
+                  - cloudformation:DescribeStacks
+                  - cloudformation:DescribeStackEvents
+                  - cloudformation:ListStackResources
+                  - cloudformation:DeleteStack
+                Resource: !Sub arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/pfm2-cfn-*/*
+              - Effect: Allow
+                Action: [cloudformation:ValidateTemplate, secretsmanager:GetRandomPassword]
+                Resource: '*'
+                Condition:
+                  StringEquals:
+                    aws:RequestedRegion: !Ref AWS::Region
+              - Effect: Allow
+                Action:
+                  - secretsmanager:CreateSecret
+                  - secretsmanager:DescribeSecret
+                  - secretsmanager:TagResource
+                  - secretsmanager:DeleteSecret
+                Resource: !Sub arn:${AWS::Partition}:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:/asistencia/proyecto-final-modulo-2/*/cloudformation/*
+              - Effect: Allow
+                Action: iam:CreateRole
+                Resource: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/pfm2-cfn-*
+                Condition:
+                  StringEquals:
+                    iam:PermissionsBoundary: !Ref InstanceBoundary
+              - Effect: Allow
+                Action: [iam:GetRole, iam:TagRole, iam:DeleteRole, iam:ListRolePolicies, iam:ListAttachedRolePolicies, iam:ListInstanceProfilesForRole, iam:GetRolePolicy, iam:PutRolePolicy, iam:DeleteRolePolicy]
+                Resource: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/pfm2-cfn-*
+              - Effect: Allow
+                Action: iam:PassRole
+                Resource: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/pfm2-cfn-*
+                Condition:
+                  StringEquals:
+                    iam:PassedToService: ec2.amazonaws.com
+              - Effect: Allow
+                Action: [iam:CreateInstanceProfile, iam:GetInstanceProfile, iam:DeleteInstanceProfile, iam:TagInstanceProfile, iam:AddRoleToInstanceProfile, iam:RemoveRoleFromInstanceProfile]
+                Resource: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:instance-profile/pfm2-cfn-*
+        - PolicyName: VerificacionDelTenant
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: [ssm:DescribeInstanceInformation, ssm:ListCommandInvocations]
+                Resource: '*'
+                Condition:
+                  StringEquals:
+                    aws:RequestedRegion: !Ref AWS::Region
+              - Effect: Allow
+                Action: ssm:SendCommand
+                Resource: !Sub arn:${AWS::Partition}:ssm:${AWS::Region}::document/AWS-RunShellScript
+              - Effect: Allow
+                Action: ssm:SendCommand
+                Resource: !Sub arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:instance/*
+                Condition:
+                  StringEquals:
+                    ssm:resourceTag/Project: proyecto-final-modulo-2
+Outputs:
+  PanelDeployRoleArn:
+    Value: !GetAtt PanelDeployRole.Arn
+  InstanceBoundaryArn:
+    Value: !Ref InstanceBoundary

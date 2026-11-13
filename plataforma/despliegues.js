@@ -1,0 +1,606 @@
+import { spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import { copyFile, cp, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { setTimeout as esperar } from 'node:timers/promises';
+import { generarPlantilla, prefijoSecretos } from '../infra/cloudformation/plantilla.js';
+import { aprovisionarPila, borrarPila, consultarPila, recursosPila, verificarPila } from './cloudformation.js';
+import { abrirPilaPulumi, huellaPulumi, inventarioPulumi, prepararProgramaPulumi, revisarPreviewPulumi, verificarEntradaPulumi } from './pulumi.js';
+
+const modulo = fileURLToPath(new URL('../infra/opentofu/', import.meta.url));
+const region = 'us-east-2';
+const ejecutable = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+const esperado = ['backend', 'database', 'frontend'];
+const salidaMaxima = 8 * 1024 * 1024;
+const lockTerraform = fileURLToPath(new URL('../infra/terraform/.terraform.lock.hcl', import.meta.url));
+const motorHcl = (motor) => motor === 'terraform' ? 'terraform' : 'tofu';
+const carpetaHcl = (motor) => motor === 'terraform' ? 'terraform' : 'opentofu';
+const claveHcl = (tenant) => `tenants/panel/${tenant.motor === 'terraform' ? 'terraform/' : ''}${tenant.identificador}/terraform.tfstate`;
+
+export function configurarDespliegue(env = process.env) {
+  const cuenta = env.PFM2_AWS_ACCOUNT;
+  const bucket = env.PFM2_STATE_BUCKET;
+  if (!cuenta && !bucket) return null;
+  if (!/^[0-9]{12}$/.test(cuenta ?? '') || !/^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/.test(bucket ?? '')) {
+    throw new Error('Configura PFM2_AWS_ACCOUNT y PFM2_STATE_BUCKET para habilitar el despliegue en AWS.');
+  }
+  return {
+    cuenta, bucket,
+    perfil: env.PFM2_DEPLOY_PROFILE ?? 'pfm2-deploy',
+    rol: 'pfm2-panel-deploy',
+    limite: `arn:aws:iam::${cuenta}:policy/proyecto-final-modulo-2/pfm2-instance-boundary`,
+  };
+}
+
+function ejecutar(programa, args, opciones) {
+  return new Promise((resolve, reject) => {
+    const proceso = spawn(programa, args, {
+      ...opciones, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true,
+      signal: AbortSignal.timeout(600_000),
+    });
+    const buffers = [[], []];
+    let bytes = 0;
+    let exceso = false;
+    [proceso.stdout, proceso.stderr].forEach((stream, indice) => {
+      stream.on('data', (chunk) => {
+        bytes += chunk.length;
+        if (bytes <= salidaMaxima) buffers[indice].push(chunk);
+        else exceso = true;
+      });
+    });
+    proceso.once('error', reject);
+    proceso.once('close', (codigo) => {
+      const [stdout, stderr] = buffers.map((partes) => Buffer.concat(partes).toString('utf8'));
+      if (exceso) return reject(new Error('La respuesta del motor excedió el tamaño permitido.'));
+      if (codigo === 0) return resolve(stdout);
+      const detalle = stdout + stderr;
+      if (/AccessDenied|UnauthorizedOperation|ExpiredToken|session has expired/i.test(detalle)) {
+        return reject(new Error('AWS rechazó la sesión o los permisos del rol de despliegue.'));
+      }
+      if (/state lock/i.test(detalle)) {
+        return reject(new Error('El estado del tenant está bloqueado. Reintenta cuando termine la otra operación.'));
+      }
+      if (/VpcLimitExceeded/i.test(detalle)) {
+        return reject(new Error('AWS alcanzó la cuota de VPC en Ohio. Reintenta cuando haya una VPC disponible.'));
+      }
+      const error = new Error(`Falló ${programa} ${args[0]}. Revisa la configuración y el estado en AWS.`);
+      if (programa === 'aws') {
+        error.awsCode = stderr.match(/An error occurred \(([A-Za-z0-9]+)\)/)?.[1];
+        error.pilaAusente = args[0] === 'cloudformation' && args[1] === 'describe-stacks' &&
+          error.awsCode === 'ValidationError' && /Stack with id .+ does not exist/i.test(stderr);
+      }
+      reject(error);
+    });
+  });
+}
+
+async function prepararTrabajo(directorio, tenant) {
+  const raiz = join(directorio, 'infra', carpetaHcl(tenant.motor));
+  await mkdir(raiz, { recursive: true });
+  await mkdir(join(directorio, 'plataforma'), { recursive: true });
+  await Promise.all([
+    ...['main.tf', 'variables.tf'].map((archivo) =>
+      copyFile(join(modulo, archivo), join(raiz, archivo))),
+    copyFile(tenant.motor === 'terraform' ? lockTerraform : join(modulo, '.terraform.lock.hcl'), join(raiz, '.terraform.lock.hcl')),
+    copyFile(join(modulo, 'backend.tf.example'), join(raiz, 'backend.tf')),
+    cp(join(modulo, 'cloud-init'), join(raiz, 'cloud-init'), { recursive: true }),
+    writeFile(join(directorio, 'plataforma', 'planes.json'), JSON.stringify([tenant.plan])),
+  ]);
+  return raiz;
+}
+
+function revisarPlan(plan, tenant) {
+  const permitidas = new Set(['no-op', 'create']);
+  const recursos = plan.resource_changes.filter(({ mode }) => mode === 'managed');
+  const servidores = recursos.filter(({ type }) => type === 'aws_instance');
+  if (servidores.length !== 3 ||
+      recursos.some(({ change }) => change.actions.some((accion) => !permitidas.has(accion))) ||
+      servidores.some(({ change }) => change.after?.tags_all?.Tenant !== tenant)) {
+    throw new Error('El plan incluye cambios fuera del despliegue inicial. Requiere revisión en AWS.');
+  }
+}
+
+async function seleccionarAmi(aws, directorio) {
+  const ruta = join(directorio, 'ami.txt');
+  try {
+    return (await readFile(ruta, 'utf8')).trim();
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+  }
+  const { Parameter } = await aws('ssm', 'get-parameter', '--name',
+    '/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64');
+  try {
+    await writeFile(ruta, Parameter.Value, { flag: 'wx' });
+    return Parameter.Value;
+  } catch (error) {
+    if (error.code !== 'EEXIST') throw error;
+    return (await readFile(ruta, 'utf8')).trim();
+  }
+}
+
+async function comprobarArranque(aws, servidores) {
+  const ids = esperado.map((rol) => servidores[rol].id);
+  const filtro = `Key=InstanceIds,Values=${ids.join(',')}`;
+  for (let intento = 0; intento < 30; intento++) {
+    const { InstanceInformationList } = await aws('ssm', 'describe-instance-information', '--filters', filtro);
+    if (InstanceInformationList.filter(({ PingStatus }) => PingStatus === 'Online').length === 3) break;
+    if (intento === 29) throw new Error('AWS creó las EC2, pero Systems Manager aún no las detecta.');
+    await esperar(5000);
+  }
+  await comprobarServicios(aws, servidores, {
+    database: 'systemctl is-active mysqld',
+    backend: 'systemctl is-active asistencia',
+  });
+  await comprobarServicios(aws, servidores, {
+    frontend: `systemctl is-active nginx && curl -fsS -o /dev/null --max-time 10 http://127.0.0.1/ &&
+      for intento in $(seq 1 24); do
+        if [ "$(curl -sS -o /dev/null -w '%{http_code}' --max-time 5 http://127.0.0.1/api/me)" = 401 ]; then exit 0; fi
+        sleep 5
+      done
+      exit 1`,
+  });
+}
+
+async function comprobarServicios(aws, servidores, comandos) {
+  const solicitudes = await Promise.all(Object.entries(comandos).map(async ([rol, comando]) => {
+    const parametros = JSON.stringify({
+      commands: ['set -e', 'cloud-init status --wait', comando],
+      executionTimeout: ['300'],
+    });
+    const { Command } = await aws('ssm', 'send-command', '--instance-ids', servidores[rol].id,
+      '--document-name', 'AWS-RunShellScript', '--parameters', parametros);
+    return { id: servidores[rol].id, comando: Command.CommandId, rol };
+  }));
+  const pendientes = new Set(solicitudes);
+  for (let intento = 0; intento < 66 && pendientes.size; intento++) {
+    for (const solicitud of pendientes) {
+      const { CommandInvocations } = await aws('ssm', 'list-command-invocations',
+        '--command-id', solicitud.comando, '--instance-id', solicitud.id);
+      const estado = CommandInvocations[0]?.Status;
+      if (estado === 'Success') pendientes.delete(solicitud);
+      if (['Failed', 'TimedOut', 'Cancelled'].includes(estado)) {
+        throw new Error(`El servicio ${solicitud.rol} no inició. Revisa cloud-init en Systems Manager.`);
+      }
+    }
+    if (pendientes.size) await esperar(5000);
+  }
+  if (pendientes.size) throw new Error('Se agotó el tiempo de verificación de los servicios.');
+}
+
+export async function conectarAws(config, ejecutarComando = ejecutar, cwd) {
+  const env = { ...process.env, AWS_PROFILE: config.perfil, AWS_REGION: region, AWS_PAGER: '', TF_IN_AUTOMATION: '1' };
+  for (const nombre of ['AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'AWS_SESSION_TOKEN', 'TF_DATA_DIR', 'TF_WORKSPACE',
+    'TF_CLI_ARGS', 'TF_CLI_ARGS_init', 'TF_CLI_ARGS_plan', 'TF_CLI_ARGS_apply']) delete env[nombre];
+  const aws = async (...args) => {
+    const salida = await ejecutarComando('aws', [
+      ...args, '--region', region, '--profile', config.perfil, '--no-cli-pager', '--output', 'json',
+    ], { cwd, env });
+    return salida.trim() ? JSON.parse(salida) : {};
+  };
+  const identidad = await aws('sts', 'get-caller-identity');
+  if (identidad.Account !== config.cuenta ||
+      !identidad.Arn.startsWith(`arn:aws:sts::${config.cuenta}:assumed-role/${config.rol}/`)) {
+    throw new Error('El perfil debe asumir el rol dedicado del panel en la cuenta configurada.');
+  }
+  return { aws, env };
+}
+
+export async function desplegarHcl({ config, directorio, datosTenant, tenant, progreso, ejecutarComando = ejecutar }) {
+  if (!ejecutable.test(tenant.identificador)) throw new Error('El identificador del tenant no es válido.');
+  const cwd = await prepararTrabajo(directorio, tenant);
+  const { aws, env } = await conectarAws(config, ejecutarComando, cwd);
+  const motor = motorHcl(tenant.motor);
+  const ejecutarHcl = (...args) => ejecutarComando(motor, args, { cwd, env });
+  const nombre = motor === 'terraform' ? 'Terraform' : 'OpenTofu';
+  const ami = await seleccionarAmi(aws, datosTenant);
+  const variables = {
+    account_id: config.cuenta, tenant_id: tenant.identificador, environment: tenant.entorno,
+    plan: tenant.plan.id, ami_id: ami, permissions_boundary_arn: config.limite, managed_by: nombre,
+  };
+  const clave = claveHcl(tenant);
+  await writeFile(join(cwd, 'tenant.tfvars.json'), JSON.stringify(variables));
+  progreso('Conectando con el estado remoto en S3.');
+  await ejecutarHcl('init', '-input=false', '-no-color', '-lock-timeout=30s',
+    `-backend-config=bucket=${config.bucket}`, `-backend-config=key=${clave}`,
+    `-backend-config=workspace_key_prefix=tenants/panel/${motor === 'terraform' ? 'terraform/' : ''}workspaces`);
+  progreso(`Generando y revisando el plan de ${nombre}.`);
+  await ejecutarHcl('plan', '-input=false', '-no-color', '-lock-timeout=30s', '-var-file=tenant.tfvars.json', '-out=tenant.tfplan');
+  revisarPlan(JSON.parse(await ejecutarHcl('show', '-json', 'tenant.tfplan')), tenant.identificador);
+  progreso('Aprovisionando la red y las tres instancias en AWS.');
+  await ejecutarHcl('apply', '-input=false', '-no-color', '-lock-timeout=30s', 'tenant.tfplan');
+  const outputs = JSON.parse(await ejecutarHcl('output', '-json'));
+  const versiones = JSON.parse(await ejecutarHcl('version', '-json'));
+  const servidores = outputs.instances.value;
+  const instancias = Object.fromEntries(esperado.map((rol) => [rol, servidores[rol].id]));
+  const discos = await describirInstancias(aws, tenant.identificador, instancias);
+  progreso('Verificando Nginx, la API y MySQL mediante Systems Manager.');
+  await comprobarArranque(aws, servidores);
+  return {
+    instancias,
+    volumenes: Object.fromEntries(discos.map(({ rol, volumen }) => [rol, volumen])),
+    app_commit: outputs.deployment.value.app_commit,
+    ami,
+    [carpetaHcl(tenant.motor)]: versiones.tofu_version ?? versiones.terraform_version,
+    proveedores: versiones.provider_selections,
+    plantilla: createHash('sha256').update(await readFile(join(cwd, 'main.tf'))).digest('hex'),
+  };
+}
+
+export async function desplegarCloudFormation({ config, directorio, datosTenant, tenant, progreso, ejecutarComando = ejecutar }) {
+  await mkdir(directorio, { recursive: true });
+  const { aws, env } = await conectarAws(config, ejecutarComando, directorio);
+  const ami = await seleccionarAmi(aws, datosTenant);
+  const { Images } = await aws('ec2', 'describe-images', '--image-ids', ami);
+  if (Images.length !== 1 || Images[0].RootDeviceType !== 'ebs' || Images[0].Architecture !== 'x86_64' ||
+      !Images[0].RootDeviceName) throw new Error('La AMI fijada no tiene un disco raíz EBS x86_64.');
+  const plantilla = await generarPlantilla(tenant, { ami, discoRaiz: Images[0].RootDeviceName, limite: config.limite });
+  const cuerpo = JSON.stringify(plantilla);
+  if (Buffer.byteLength(cuerpo) > 51_200) throw new Error('La plantilla del tenant excede el tamaño en línea de CloudFormation.');
+  const huella = createHash('sha256').update(cuerpo).digest('hex');
+  const archivo = join(directorio, 'tenant.cloudformation.json');
+  await writeFile(archivo, cuerpo);
+  const pila = await aprovisionarPila(aws, { tenant, plantilla, archivo, huella, progreso });
+  const salidas = new Map(pila.Outputs?.map(({ OutputKey, OutputValue }) => [OutputKey, OutputValue]));
+  const instancias = Object.fromEntries(esperado.map((rol) =>
+    [rol, salidas.get(`Instancia${rol[0].toUpperCase() + rol.slice(1)}`)]));
+  if (new Set(Object.values(instancias)).size !== esperado.length ||
+      Object.values(instancias).some((id) => !/^i-[0-9a-f]{8}(?:[0-9a-f]{9})?$/.test(id ?? ''))) {
+    throw new Error('La pila no devolvió los identificadores de las tres capas.');
+  }
+  const discos = await describirInstancias(aws, tenant.identificador, instancias);
+  progreso('Verificando Nginx, la API y MySQL mediante Systems Manager.');
+  await comprobarArranque(aws, Object.fromEntries(discos.map(({ rol, id }) => [rol, { id }])));
+  return {
+    pila: pila.StackId, instancias,
+    volumenes: Object.fromEntries(discos.map(({ rol, volumen }) => [rol, volumen])),
+    app_commit: salidas.get('AppCommit'), ami,
+    cloudformation: plantilla.AWSTemplateFormatVersion,
+    aws_cli: (await ejecutarComando('aws', ['--version'], { cwd: directorio, env })).trim(),
+    plantilla: pila.Tags.find(({ Key }) => Key === 'TemplateDigest')?.Value,
+  };
+}
+
+export async function desplegarPulumi({ config, directorio, datosTenant, tenant, progreso, ejecutarComando = ejecutar }) {
+  if (!ejecutable.test(tenant.identificador)) throw new Error('El identificador del tenant no es válido.');
+  await mkdir(directorio, { recursive: true });
+  const { aws, env } = await conectarAws(config, ejecutarComando, directorio);
+  const ami = await seleccionarAmi(aws, datosTenant);
+  const cwd = await prepararProgramaPulumi(datosTenant, tenant, { ...config, ami });
+  progreso('Abriendo el estado remoto de Pulumi en S3.');
+  const pila = await abrirPilaPulumi({ ejecutar: ejecutarComando, env, config, cwd, tenant, crear: true });
+  progreso('Generando y revisando la vista previa de Pulumi.');
+  const archivo = join(directorio, 'pulumi-plan.json');
+  const preview = JSON.parse(await pila.ejecutar('preview', '--json', '--show-sames', '--save-plan', archivo));
+  revisarPreviewPulumi(preview, tenant);
+  progreso('Aplicando el plan de Pulumi para el tenant.');
+  await pila.ejecutar('up', '--plan', archivo, '--yes', '--skip-preview');
+  const salidas = JSON.parse(await pila.ejecutar('stack', 'output', '--json'));
+  const instancias = Object.fromEntries(esperado.map((rol) => [rol, salidas.instances?.[rol]?.id]));
+  const discos = await describirInstancias(aws, tenant.identificador, instancias);
+  progreso('Verificando Nginx, la API y MySQL mediante Systems Manager.');
+  await comprobarArranque(aws, salidas.instances);
+  const paquetes = JSON.parse(await readFile(join(cwd, 'package-lock.json'), 'utf8')).packages;
+  return {
+    instancias, volumenes: Object.fromEntries(discos.map(({ rol, volumen }) => [rol, volumen])),
+    app_commit: salidas.appCommit, ami, pulumi: (await pila.version()).trim(), aws_pulumi: paquetes['node_modules/@pulumi/aws'].version,
+    plantilla: await huellaPulumi(cwd),
+  };
+}
+
+export async function describirInstancias(aws, tenant, ids) {
+  if (new Set(esperado.map((rol) => ids[rol])).size !== esperado.length ||
+      esperado.some((rol) => !/^i-[0-9a-f]{8}(?:[0-9a-f]{9})?$/.test(ids[rol] ?? ''))) {
+    throw new Error('Faltan los identificadores de las tres EC2 del tenant.');
+  }
+  const { Reservations } = await aws('ec2', 'describe-instances', '--instance-ids', ...Object.values(ids));
+  const instancias = Reservations.flatMap(({ Instances }) => Instances);
+  if (instancias.length !== esperado.length) throw new Error('AWS no devolvió las tres EC2 registradas.');
+  return esperado.map((rol) => {
+    const instancia = instancias.find(({ InstanceId }) => InstanceId === ids[rol]);
+    const etiquetas = Object.fromEntries((instancia?.Tags ?? []).map(({ Key, Value }) => [Key, Value]));
+    const volumen = instancia?.BlockDeviceMappings?.find(({ DeviceName }) => DeviceName === instancia.RootDeviceName)?.Ebs?.VolumeId;
+    if (etiquetas.Project !== 'proyecto-final-modulo-2' || etiquetas.Tenant !== tenant ||
+        etiquetas.Role !== rol || instancia?.RootDeviceType !== 'ebs' || !volumen) {
+      throw new Error('Las EC2 o sus discos no coinciden con el tenant registrado.');
+    }
+    return { rol, id: instancia.InstanceId, estado: instancia.State.Name, volumen };
+  });
+}
+
+export async function cambiarEstadoEc2({ config, tenant, tipo, infraestructura, progreso,
+  ejecutarComando = ejecutar, pausar = esperar }) {
+  if (tipo !== 'suspender' && tipo !== 'reanudar') throw new Error('Operación de EC2 desconocida.');
+  const ids = Object.fromEntries(esperado.map((rol) => [rol, infraestructura?.instancias?.[rol]]));
+  if (new Set(Object.values(ids)).size !== esperado.length ||
+      Object.values(ids).some((id) => !/^i-[0-9a-f]{8}(?:[0-9a-f]{9})?$/.test(id ?? ''))) {
+    throw new Error('Faltan los identificadores de EC2 del despliegue original.');
+  }
+  const { aws } = await conectarAws(config, ejecutarComando);
+  const detener = tipo === 'suspender';
+  const origen = detener ? 'running' : 'stopped';
+  const objetivo = detener ? 'stopped' : 'running';
+  const comando = detener ? 'stop-instances' : 'start-instances';
+  let instancias = await describirInstancias(aws, tenant.identificador, ids);
+  const volumenes = infraestructura.volumenes ??
+    Object.fromEntries(instancias.map(({ rol, volumen }) => [rol, volumen]));
+  const solicitadas = new Set();
+  progreso(detener ? 'Deteniendo las tres EC2 y conservando sus discos.' : 'Encendiendo las tres EC2 del tenant.');
+  for (let intento = 0; intento < 60; intento++) {
+    for (const { rol, estado, volumen } of instancias) {
+      if (!['running', 'stopped', 'pending', 'stopping'].includes(estado) || volumenes[rol] !== volumen) {
+        throw new Error('AWS informó un cambio inesperado en las instancias o sus discos.');
+      }
+    }
+    if (instancias.every(({ estado }) => estado === objetivo)) {
+      if (!detener) {
+        progreso('Verificando Nginx, la API y MySQL mediante Systems Manager.');
+        await comprobarArranque(aws, Object.fromEntries(instancias.map(({ rol, id }) => [rol, { id }])));
+      }
+      return { ...infraestructura, volumenes };
+    }
+    const pendientes = instancias.filter(({ estado, id }) => estado === origen && !solicitadas.has(id));
+    if (pendientes.length) {
+      await aws('ec2', comando, '--instance-ids', ...pendientes.map(({ id }) => id));
+      for (const { id } of pendientes) solicitadas.add(id);
+    }
+    await pausar(5000);
+    instancias = await describirInstancias(aws, tenant.identificador, ids);
+  }
+  throw new Error('AWS todavía no confirma el nuevo estado de todas las instancias. Puedes reintentar.');
+}
+
+function resumirRetiro(plan, tenant, infraestructura) {
+  const cambios = (plan.resource_changes ?? []).filter(({ mode }) => mode === 'managed');
+  const recursos = [];
+  const discos = [];
+  for (const { address, type, change } of cambios) {
+    if (change.actions.join(',') === 'no-op') continue;
+    const actual = change.before;
+    const etiquetas = actual?.tags_all;
+    if (change.actions.join(',') !== 'delete' || !actual ||
+        (etiquetas && (etiquetas.Project !== 'proyecto-final-modulo-2' || etiquetas.Tenant !== tenant))) {
+      throw new Error('El plan contiene recursos o cambios que requieren revisión en AWS.');
+    }
+    recursos.push({ direccion: address, identificador: actual.id });
+    if (type !== 'aws_instance') continue;
+    const rol = etiquetas?.Role;
+    const disco = actual.root_block_device?.[0];
+    if (!esperado.includes(rol) || infraestructura.instancias[rol] !== actual.id ||
+        !disco?.volume_id || !disco.delete_on_termination ||
+        (infraestructura.volumenes && infraestructura.volumenes[rol] !== disco.volume_id)) {
+      throw new Error('Las EC2 o los discos del plan no coinciden con el despliegue registrado.');
+    }
+    discos.push({ rol, id: disco.volume_id, gib: disco.volume_size });
+  }
+  return { recursos, discos };
+}
+
+async function comprobarDiscosDelPlan(aws, discos, infraestructura) {
+  if (!discos.length) return;
+  const { Reservations } = await aws('ec2', 'describe-instances', '--instance-ids',
+    ...discos.map(({ rol }) => infraestructura.instancias[rol]));
+  const instancias = Reservations.flatMap(({ Instances }) => Instances);
+  for (const { rol, id } of discos) {
+    const instancia = instancias.find(({ InstanceId }) => InstanceId === infraestructura.instancias[rol]);
+    const dispositivos = instancia?.BlockDeviceMappings ?? [];
+    if (dispositivos.length !== 1 || dispositivos[0].DeviceName !== instancia.RootDeviceName ||
+        dispositivos[0].Ebs?.VolumeId !== id || !dispositivos[0].Ebs.DeleteOnTermination) {
+      throw new Error('La EC2 tiene discos distintos a los del plan. Revisa sus dispositivos en AWS.');
+    }
+  }
+}
+
+async function confirmarRetiroAws(aws, tenant, infraestructura, discosPlan) {
+  const filtros = ['--filters', `Name=tag:Tenant,Values=${tenant}`];
+  const discos = new Set([...Object.values(infraestructura.volumenes ?? {}), ...discosPlan.map(({ id }) => id)]);
+  for (let intento = 0; intento < 8; intento++) {
+    const [instancias, volumenes, vpcs, parametros] = await Promise.all([
+      aws('ec2', 'describe-instances', ...filtros, 'Name=instance-state-name,Values=pending,running,stopping,stopped,shutting-down'),
+      aws('ec2', 'describe-volumes', '--filters', discos.size ? `Name=volume-id,Values=${[...discos].join(',')}` : filtros[1]),
+      aws('ec2', 'describe-vpcs', ...filtros),
+      aws('ssm', 'describe-parameters', '--parameter-filters',
+        `Key=Name,Option=BeginsWith,Values=/asistencia/proyecto-final-modulo-2/${tenant}/`),
+    ]);
+    if (!(instancias.Reservations.length || volumenes.Volumes.length || vpcs.Vpcs.length || parametros.Parameters.length)) return;
+    await esperar(3000);
+  }
+  throw new Error('AWS todavía informa recursos del tenant. Revisa otro plan de retiro antes de reintentar.');
+}
+
+export async function gestionarRetiro({ config, tenant, datosTenant, tipo, trabajoId, retiro, infraestructura,
+  progreso, ejecutarComando = ejecutar }) {
+  if (!Number.isSafeInteger(retiro.despliegueId) || !infraestructura?.instancias) {
+    throw new Error('Falta el despliegue original del tenant.');
+  }
+  const cwd = join(datosTenant, String(retiro.despliegueId), 'infra', carpetaHcl(tenant.motor));
+  const { aws, env } = await conectarAws(config, ejecutarComando, cwd);
+  const ejecutarHcl = (...args) => ejecutarComando(motorHcl(tenant.motor), args, { cwd, env });
+  const metadata = JSON.parse(await readFile(join(cwd, '.terraform', 'terraform.tfstate'), 'utf8'));
+  if (metadata.backend?.type !== 's3' || metadata.backend.config.bucket !== config.bucket ||
+      metadata.backend.config.key !== claveHcl(tenant)) {
+    throw new Error('El estado remoto no corresponde a este tenant.');
+  }
+  const preparando = tipo === 'preparar-retiro';
+  const revision = preparando ? trabajoId : retiro.revision?.id;
+  if (!Number.isSafeInteger(revision)) throw new Error('Prepara un plan nuevo antes de confirmar el retiro.');
+  const archivo = `retiro-${revision}.tfplan`;
+  if (preparando) {
+    progreso(`Generando el plan de retiro con ${tenant.motor === 'terraform' ? 'Terraform' : 'OpenTofu'}.`);
+    await ejecutarHcl('plan', '-destroy', '-input=false', '-no-color', '-lock-timeout=30s',
+      '-var-file=tenant.tfvars.json', `-out=${archivo}`);
+  }
+  const huella = createHash('sha256').update(await readFile(join(cwd, archivo))).digest('hex');
+  const resumen = resumirRetiro(JSON.parse(await ejecutarHcl('show', '-json', archivo)), tenant.identificador, infraestructura);
+  await comprobarDiscosDelPlan(aws, resumen.discos, infraestructura);
+  if (preparando) return { ...resumen, huella };
+  if (huella !== retiro.revision.huella) throw new Error('El plan cambió. Prepara un plan nuevo para revisarlo.');
+  progreso('Aplicando el retiro confirmado en AWS.');
+  if (resumen.recursos.length) {
+    await ejecutarHcl('apply', '-input=false', '-no-color', '-lock-timeout=30s', archivo);
+  }
+  await confirmarRetiroAws(aws, tenant.identificador, infraestructura, resumen.discos);
+  return { recursos: resumen.recursos.length, discos: resumen.discos.length };
+}
+
+export async function gestionarRetiroCloudFormation({ config, tenant, tipo, retiro, infraestructura, progreso,
+  ejecutarComando = ejecutar }) {
+  const id = infraestructura?.pila;
+  if (!id?.startsWith(`arn:aws:cloudformation:${region}:${config.cuenta}:stack/pfm2-cfn-${tenant.identificador}/`) ||
+      !infraestructura.volumenes || !infraestructura.instancias) {
+    throw new Error('Falta la pila original de CloudFormation del tenant.');
+  }
+  const { aws } = await conectarAws(config, ejecutarComando);
+  const preparando = tipo === 'preparar-retiro';
+  progreso(preparando ? 'Consultando los recursos y discos de la pila de CloudFormation.' : 'Revalidando la revisión de CloudFormation.');
+  let pila = await consultarPila(aws, id);
+  if (pila) {
+    verificarPila(pila, tenant, id);
+    if (pila.StackStatus === 'DELETE_IN_PROGRESS') {
+      await borrarPila(aws, id);
+      pila = null;
+    }
+  }
+  const recursos = [];
+  const discos = [];
+  if (pila) {
+    if (!['CREATE_COMPLETE', 'DELETE_FAILED'].includes(pila.StackStatus)) {
+      throw new Error('La pila está cambiando o requiere revisión en CloudFormation.');
+    }
+    const inventario = await recursosPila(aws, id);
+    for (const recurso of inventario.filter(({ ResourceStatus }) => ResourceStatus !== 'DELETE_COMPLETE')) {
+      if (!recurso.PhysicalResourceId) throw new Error('La pila contiene un recurso sin identidad confirmada.');
+      recursos.push({ direccion: recurso.LogicalResourceId, identificador: recurso.PhysicalResourceId });
+    }
+    const idsDiscos = [];
+    for (const rol of esperado) {
+      const recurso = inventario.find(({ LogicalResourceId }) => LogicalResourceId === `Instancia${rol[0].toUpperCase() + rol.slice(1)}`);
+      if (!recurso || recurso.PhysicalResourceId !== infraestructura.instancias[rol] || recurso.ResourceType !== 'AWS::EC2::Instance') {
+        throw new Error('Las instancias de la pila no coinciden con el tenant registrado.');
+      }
+      if (recurso.ResourceStatus !== 'DELETE_COMPLETE') idsDiscos.push({ rol, id: infraestructura.volumenes[rol] });
+    }
+    if (idsDiscos.length) {
+      await comprobarDiscosDelPlan(aws, idsDiscos, infraestructura);
+      const { Volumes } = await aws('ec2', 'describe-volumes', '--volume-ids', ...idsDiscos.map(({ id }) => id));
+      for (const disco of idsDiscos) {
+        const volumen = Volumes.find(({ VolumeId }) => VolumeId === disco.id);
+        if (!volumen) throw new Error('AWS no devolvió uno de los discos raíz del tenant.');
+        discos.push({ ...disco, gib: volumen.Size });
+      }
+    }
+  }
+  const huella = createHash('sha256').update(JSON.stringify([id, recursos, discos])).digest('hex');
+  if (preparando) return { recursos, discos, huella };
+  if (huella !== retiro.revision?.huella) throw new Error('La pila cambió. Prepara y revisa un inventario nuevo antes de retirarla.');
+  progreso('Retirando la pila confirmada en CloudFormation.');
+  if (pila) await borrarPila(aws, id);
+  await confirmarRetiroAws(aws, tenant.identificador, infraestructura, discos);
+  for (const clave of ['db', 'admin']) {
+    const secreto = await aws('secretsmanager', 'describe-secret', '--secret-id', `${prefijoSecretos(tenant.identificador)}/${clave}`)
+      .catch((error) => {
+        if (error.awsCode === 'ResourceNotFoundException') return null;
+        throw error;
+      });
+    if (secreto && !secreto.DeletedDate) throw new Error('AWS todavía informa un secreto activo del tenant.');
+  }
+  return { recursos: recursos.length, discos: discos.length };
+}
+
+export async function gestionarRetiroPulumi({ config, tenant, datosTenant, tipo, retiro, infraestructura, progreso,
+  ejecutarComando = ejecutar }) {
+  if (!infraestructura?.instancias || !infraestructura.volumenes) throw new Error('Falta el despliegue original de Pulumi.');
+  const cwd = join(datosTenant, 'pulumi');
+  verificarEntradaPulumi(JSON.parse(await readFile(join(cwd, 'tenant.pulumi.json'), 'utf8')), tenant, config.cuenta);
+  const { aws, env } = await conectarAws(config, ejecutarComando, cwd);
+  const pila = await abrirPilaPulumi({ ejecutar: ejecutarComando, env, config, cwd, tenant });
+  progreso('Revisando el estado de Pulumi y los discos registrados en AWS.');
+  const estado = JSON.parse(await pila.ejecutar('stack', 'export'));
+  const { recursos, instancias, manifiesto } = inventarioPulumi(estado, tenant, infraestructura);
+  const idsDiscos = instancias.map(({ rol }) => ({ rol, id: infraestructura.volumenes[rol] }));
+  const ausentes = esperado.filter((rol) => !instancias.some((instancia) => instancia.rol === rol));
+  if (ausentes.length) {
+    const [ec2, ebs] = await Promise.all([
+      aws('ec2', 'describe-instances', '--filters', `Name=instance-id,Values=${ausentes.map((rol) => infraestructura.instancias[rol]).join(',')}`,
+        'Name=instance-state-name,Values=pending,running,stopping,stopped,shutting-down'),
+      aws('ec2', 'describe-volumes', '--filters', `Name=volume-id,Values=${ausentes.map((rol) => infraestructura.volumenes[rol]).join(',')}`),
+    ]);
+    if (ec2.Reservations.length || ebs.Volumes.length) throw new Error('AWS conserva EC2 o discos fuera del estado de Pulumi.');
+  }
+  await comprobarDiscosDelPlan(aws, idsDiscos, infraestructura);
+  const { Volumes } = idsDiscos.length
+    ? await aws('ec2', 'describe-volumes', '--volume-ids', ...idsDiscos.map(({ id }) => id)) : { Volumes: [] };
+  const discos = idsDiscos.map((disco) => {
+    const volumen = Volumes.find(({ VolumeId }) => VolumeId === disco.id);
+    if (!volumen) throw new Error('AWS no devolvió uno de los discos raíz del tenant.');
+    return { ...disco, gib: volumen.Size };
+  });
+  const huella = createHash('sha256').update(JSON.stringify([manifiesto, recursos, discos])).digest('hex');
+  if (tipo === 'preparar-retiro') return { recursos, discos, huella };
+  if (huella !== retiro.revision?.huella) throw new Error('El estado de Pulumi cambió. Prepara y revisa un inventario nuevo.');
+  progreso('Retirando los recursos confirmados de Pulumi.');
+  if (recursos.length) await pila.ejecutar('destroy', '--yes');
+  await confirmarRetiroAws(aws, tenant.identificador, infraestructura, discos);
+  return { recursos: recursos.length, discos: discos.length };
+}
+
+export function ejecutarOperacionAws(trabajo) {
+  const motor = trabajo.tenant.motor;
+  if (trabajo.tipo === 'desplegar') {
+    if (motor === 'cloudformation') return desplegarCloudFormation(trabajo);
+    if (motor === 'pulumi') return desplegarPulumi(trabajo);
+    return desplegarHcl(trabajo);
+  }
+  if (['suspender', 'reanudar'].includes(trabajo.tipo)) return cambiarEstadoEc2(trabajo);
+  if (motor === 'cloudformation') return gestionarRetiroCloudFormation(trabajo);
+  if (motor === 'pulumi') return gestionarRetiroPulumi(trabajo);
+  return gestionarRetiro(trabajo);
+}
+
+export function iniciarTrabajador(registro, directorio, ejecutarTrabajo) {
+  let ocupado = false;
+  let cerrado = false;
+  let activo = Promise.resolve();
+  async function procesar() {
+    if (ocupado || cerrado) return;
+    ocupado = true;
+    try {
+      const trabajo = registro.reclamar();
+      if (!trabajo) return;
+      const tenant = registro.obtener(trabajo.tenant_id);
+      const progreso = (fase) => registro.actualizar(trabajo.id, 'en-curso', fase);
+      const latido = setInterval(() => registro.tocar(trabajo.id), 10_000);
+      try {
+        const datosTenant = join(directorio, tenant.identificador);
+        const salida = await ejecutarTrabajo({
+          directorio: join(datosTenant, String(trabajo.id)), datosTenant, tenant, progreso, tipo: trabajo.tipo,
+          infraestructura: registro.obtenerInfraestructura(tenant.identificador), trabajoId: trabajo.id,
+          retiro: registro.obtenerRetiro(tenant.identificador),
+        });
+        if (trabajo.tipo === 'suspender') {
+          registro.actualizar(trabajo.id, 'suspendido', 'Las tres EC2 están detenidas y conservan sus discos.', salida);
+        } else if (trabajo.tipo === 'preparar-retiro') {
+          registro.actualizar(trabajo.id, 'retiro-pendiente', 'Revisa el plan antes de confirmar el retiro.', salida);
+        } else if (trabajo.tipo === 'retirar') {
+          registro.actualizar(trabajo.id, 'retirado', 'AWS confirmó el retiro de los recursos del tenant.', salida);
+        } else {
+          registro.actualizar(trabajo.id, 'listo', 'Los tres servicios están operativos.', salida);
+        }
+      } catch (error) {
+        const mensaje = error.code === 'ENOENT' ? 'Comprueba las herramientas del motor y los archivos del despliegue.' :
+          error.name === 'AbortError' ? 'El motor excedió el tiempo de espera.' :
+          error.constructor === Error && !error.code ? error.message : 'El despliegue se interrumpió.';
+        registro.actualizar(trabajo.id, 'error', mensaje);
+      } finally {
+        clearInterval(latido);
+      }
+    } finally {
+      ocupado = false;
+    }
+  }
+  const intervalo = setInterval(() => {
+    if (!ocupado) activo = procesar().catch(() => console.error('No se pudo procesar la cola de despliegues.'));
+  }, 1500);
+  intervalo.unref();
+  return () => { cerrado = true; clearInterval(intervalo); return activo; };
+}

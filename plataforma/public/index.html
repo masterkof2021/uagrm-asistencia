@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="es-BO">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Tenants | UAGRM Asistencia</title>
+  <link rel="stylesheet" href="/styles.css">
+  <script type="module" src="/app.js"></script>
+</head>
+<body>
+  <aside class="lateral">
+    <a class="marca" href="#tenants">
+      <span class="monograma" aria-hidden="true">A</span>
+      <span>Asistencia<small>UAGRM</small></span>
+    </a>
+    <nav aria-label="Administración">
+      <a href="#tenants" id="nav-tenants">Tenants</a>
+      <a href="#crear" id="nav-crear">Registrar tenant</a>
+    </nav>
+    <span class="entorno-local"><span aria-hidden="true"></span> Panel local</span>
+  </aside>
+
+  <main>
+    <header class="cabecera">
+      <span id="ruta">Tenants / Nuevo registro</span>
+      <span class="region">AWS · Ohio <span>us-east-2</span></span>
+    </header>
+    <div class="pagina">
+      <section id="vista-crear" aria-labelledby="titulo-crear">
+        <header class="introduccion">
+          <h1 id="titulo-crear">Registrar tenant</h1>
+          <p>Define la institución, el plan y el motor de infraestructura.</p>
+        </header>
+
+        <form id="registro" class="distribucion">
+          <div class="panel formulario">
+            <fieldset>
+              <legend>Datos de la institución</legend>
+              <div class="campos">
+                <label>Nombre de la institución
+                  <input name="nombre" placeholder="Instituto San Marcos" required minlength="2" maxlength="120">
+                </label>
+                <label>Identificador único
+                  <input name="identificador" placeholder="instituto-san-marcos" required minlength="3" maxlength="40"
+                    pattern="[a-zA-Z0-9]+(?:-[a-zA-Z0-9]+)*" autocapitalize="none" spellcheck="false"
+                    aria-describedby="ayuda-identificador">
+                  <small id="ayuda-identificador">Letras sin tildes, números y guiones.</small>
+                </label>
+                <label>Correo de contacto
+                  <input name="correo" type="email" placeholder="admin@institucion.edu.bo" required maxlength="254">
+                </label>
+                <label>Entorno
+                  <select name="entorno" id="entorno" required></select>
+                </label>
+              </div>
+            </fieldset>
+
+            <fieldset>
+              <legend>Plan de servicio</legend>
+              <div id="planes" class="planes"></div>
+            </fieldset>
+
+            <fieldset>
+              <legend>Infraestructura</legend>
+              <label>Motor de aprovisionamiento
+                <select name="motor" id="motor" required></select>
+              </label>
+            </fieldset>
+          </div>
+
+          <aside class="panel resumen" aria-labelledby="titulo-resumen">
+            <h2 id="titulo-resumen">Resumen del tenant</h2>
+            <dl class="datos-resumen">
+              <div><dt>Institución</dt><dd id="resumen-nombre">—</dd></div>
+              <div><dt>Identificador</dt><dd id="resumen-id">—</dd></div>
+              <div><dt>Entorno</dt><dd id="resumen-entorno">—</dd></div>
+              <div><dt>Motor</dt><dd id="resumen-motor">—</dd></div>
+            </dl>
+            <h3 id="resumen-plan">Recursos del plan</h3>
+            <ul id="resumen-recursos" class="recursos"></ul>
+            <p class="nota">El registro deja el tenant pendiente de aprovisionamiento.</p>
+            <p id="mensaje-formulario" class="aviso" role="alert" hidden></p>
+            <button type="submit" class="primario" id="guardar" disabled>Guardar tenant</button>
+          </aside>
+        </form>
+      </section>
+
+      <section id="vista-tenants" aria-labelledby="titulo-tenants" hidden>
+        <header class="introduccion con-accion">
+          <div>
+            <h1 id="titulo-tenants">Tenants</h1>
+            <p>Consulta las instituciones registradas y su estado.</p>
+          </div>
+          <a class="primario" href="#crear">Registrar tenant</a>
+        </header>
+        <p id="resultado" class="exito" role="status" hidden></p>
+        <div class="panel lista">
+          <form id="filtros" class="filtros">
+            <label>Buscar
+              <input type="search" name="buscar" placeholder="Nombre o identificador" maxlength="120">
+            </label>
+            <label>Plan
+              <select name="plan" id="filtro-plan"><option value="">Todos</option></select>
+            </label>
+            <label>Entorno
+              <select name="entorno" id="filtro-entorno"><option value="">Todos</option></select>
+            </label>
+            <label>Estado
+              <select name="estado">
+                <option value="">Todos</option>
+                <option value="registrado">Registrado</option><option value="en-cola">En cola</option>
+                <option value="en-curso">En despliegue</option><option value="listo">Operativo</option>
+                <option value="suspendido">Suspendido</option><option value="error">Con error</option>
+                <option value="retiro-pendiente">Retiro pendiente</option><option value="retirado">Retirado</option>
+              </select>
+            </label>
+            <button type="submit" class="secundario">Filtrar</button>
+          </form>
+          <p id="estado-lista" class="estado-lista" role="status"></p>
+          <div class="tabla" id="tabla" hidden>
+            <table>
+              <thead><tr><th>Institución</th><th>Plan</th><th>Entorno</th><th>Motor</th><th>Estado</th><th>Acciones</th></tr></thead>
+              <tbody id="filas"></tbody>
+            </table>
+          </div>
+        </div>
+        <section id="observabilidad" class="panel lista" aria-labelledby="titulo-alertas" hidden>
+          <header class="con-accion">
+            <h2 id="titulo-alertas">Monitoreo</h2>
+            <a href="http://127.0.0.1:3000/d/pfm2-tenants">Abrir Grafana</a>
+          </header>
+          <h3>Alertas activas</h3>
+          <p id="estado-alertas" class="estado-lista" role="status"></p>
+          <div id="tabla-alertas" class="tabla" hidden>
+            <table>
+              <thead><tr><th>Alerta</th><th>Tenant</th><th>Entorno</th><th>Severidad</th><th>Detección (Bolivia)</th></tr></thead>
+              <tbody id="filas-alertas"></tbody>
+            </table>
+          </div>
+          <h3>Eventos recientes</h3>
+          <p id="estado-eventos" class="estado-lista" role="status"></p>
+          <div id="tabla-eventos" class="tabla" hidden>
+            <table>
+              <caption>Últimos 50 eventos de las últimas 24 horas</caption>
+              <thead><tr><th>Alerta</th><th>Tenant</th><th>Entorno</th><th>Severidad</th><th>Detección (Bolivia)</th><th>Evento (Bolivia)</th></tr></thead>
+              <tbody id="filas-eventos"></tbody>
+            </table>
+          </div>
+        </section>
+      </section>
+    </div>
+  </main>
+  <dialog id="revision-retiro" aria-labelledby="titulo-retiro">
+    <h2 id="titulo-retiro">Revisar retiro</h2>
+    <p id="impacto-retiro"></p>
+    <ul id="discos-retiro"></ul>
+    <details>
+      <summary id="total-retiro"></summary>
+      <ul id="recursos-retiro"></ul>
+    </details>
+    <div class="acciones-retiro">
+      <button id="cancelar-retiro" type="button" class="secundario">Cancelar retiro</button>
+      <button id="confirmar-retiro" type="button" class="primario peligro">Confirmar retiro</button>
+    </div>
+  </dialog>
+</body>
+</html>

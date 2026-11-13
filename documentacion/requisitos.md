@@ -12,9 +12,9 @@ El PDF **Requisitos del proyecto finalv2.pdf** define el alcance. Se revisaron v
 | RF-14 | Consultar tenants por nombre, estado, plan y entorno. |
 | RF-16–18 | Suspender y reanudar tenants, conservar sus datos según la política de retención y mostrar recursos y datos afectados antes de solicitar confirmación para eliminar. |
 | RF-21 | Mantener las funciones de UAGRM Asistencia, incluidas marcas, gestión de módulos e importación desde Excel. |
-| RF-25–29 | Integrar Grafana por tenant y entorno. Mostrar disponibilidad, CPU, memoria, latencia, errores del backend y estado de la base de datos. Alertar por caídas, aumento de errores o límites de recursos, con tenant afectado y hora de detección en la plataforma. |
+| RF-25–29 | Integrar Grafana por tenant y entorno. Mostrar disponibilidad, CPU, memoria, latencia, errores del backend y estado de la base de datos. Alertar por caídas, aumento de errores o límites de recursos. Mostrar en la plataforma las alertas y los eventos recientes, con tenant afectado y hora de detección. |
 
-El PDF conserva RF-12, aunque el docente describe el reintento como avanzado y el criterio de aceptación correspondiente aparece tachado. El historial de operaciones y resultados también sigue vigente en la sección 5. El entregable 6 conserva la mención de actualizar, respaldar y restaurar, mientras que los requisitos funcionales correspondientes están tachados. La guía de operación cubrirá las operaciones implementadas según los requisitos vigentes.
+RF-12 y el historial de operaciones y resultados de la sección 5 siguen vigentes. La guía de operación cubrirá el registro y despliegue de tenants, la consulta de estado e historial, el reintento, la suspensión, la reanudación y el retiro, según los requisitos funcionales vigentes.
 
 ## Arquitectura y operación
 

@@ -1,0 +1,39 @@
+#!/bin/bash
+set -euo pipefail
+umask 022
+export AWS_PAGER=""
+app_commit='${app_commit}'
+parameter_prefix='${parameter_prefix}'
+frontend_ip='${frontend_ip}'
+backend_ip='${backend_ip}'
+database_ip='${database_ip}'
+web_origin='${web_origin}'
+
+retry() {
+    local attempt
+    for attempt in {1..24}; do
+        if "$@"; then return 0; fi
+        sleep 10
+    done
+    return 1
+}
+
+fetch_app() {
+    local archive
+    archive=$(mktemp)
+    retry curl -fsSL --connect-timeout 10 --max-time 90 \
+        "https://codeload.github.com/masterkof2021/uagrm-asistencia/tar.gz/$app_commit" -o "$archive"
+    install -d -m 0755 /opt/asistencia
+    tar -xzf "$archive" --strip-components=1 -C /opt/asistencia
+    rm -f "$archive"
+}
+
+read_secret() {
+    local value
+    value=$(retry ${read_secret_command})
+    if [[ ! "$value" =~ ^[A-Za-z0-9]{48}$ ]]; then
+        echo "El parámetro de arranque $1 no tiene el formato esperado." >&2
+        return 1
+    fi
+    printf '%s' "$value"
+}

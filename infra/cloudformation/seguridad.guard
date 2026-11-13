@@ -1,0 +1,34 @@
+let instancias = Resources.*[ Type == 'AWS::EC2::Instance' ]
+let grupos = Resources.*[ Type == 'AWS::EC2::SecurityGroup' ]
+let entradas = Resources.*[ Type == 'AWS::EC2::SecurityGroupIngress' ]
+let roles = Resources.*[ Type == 'AWS::IAM::Role' ]
+
+rule instancias_con_imdsv2_y_ebs_cifrado {
+  %instancias !empty
+  %instancias.Properties.MetadataOptions.HttpTokens == 'required'
+  %instancias.Properties.CreditSpecification.CPUCredits == 'standard'
+  %instancias.Properties.BlockDeviceMappings !empty
+  %instancias.Properties.BlockDeviceMappings[*].Ebs.Encrypted == true
+  %instancias.Properties.BlockDeviceMappings[*].Ebs.DeleteOnTermination == true
+}
+
+rule entrada_solo_entre_capas {
+  %grupos.Properties.SecurityGroupIngress !exists
+  %entradas !empty
+  %entradas.Properties.SourceSecurityGroupId.Ref exists
+  %entradas.Properties.CidrIp !exists
+  %entradas.Properties.CidrIpv6 !exists
+  Resources.EntradaBackend.Properties.SourceSecurityGroupId.Ref == 'SeguridadFrontend'
+  Resources.EntradaDatabase.Properties.SourceSecurityGroupId.Ref == 'SeguridadBackend'
+}
+
+rule salida_https_limitada {
+  %grupos.Properties.SecurityGroupEgress[*].IpProtocol == 'tcp'
+  %grupos.Properties.SecurityGroupEgress[*].FromPort == 443
+  %grupos.Properties.SecurityGroupEgress[*].ToPort == 443
+}
+
+rule roles_con_limite_del_proyecto {
+  %roles !empty
+  %roles.Properties.PermissionsBoundary exists
+}

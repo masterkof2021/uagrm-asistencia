@@ -1,0 +1,319 @@
+{
+  "uid": "pfm2-tenants",
+  "title": "Salud de tenants · UAGRM Asistencia",
+  "schemaVersion": 39,
+  "version": 1,
+  "timezone": "America/La_Paz",
+  "editable": false,
+  "refresh": "30s",
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "templating": {
+    "list": [
+      {
+        "name": "entorno",
+        "label": "Entorno",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "pfm2-prometheus"
+        },
+        "query": "label_values(pfm2_muestra_up, entorno)",
+        "definition": "label_values(pfm2_muestra_up, entorno)",
+        "refresh": 2,
+        "includeAll": true,
+        "allValue": ".*",
+        "multi": true,
+        "current": {
+          "text": "All",
+          "value": "$__all"
+        }
+      },
+      {
+        "name": "tenant",
+        "label": "Tenant",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "pfm2-prometheus"
+        },
+        "query": "label_values(pfm2_muestra_up{entorno=~\"$entorno\"}, tenant)",
+        "definition": "label_values(pfm2_muestra_up{entorno=~\"$entorno\"}, tenant)",
+        "refresh": 2,
+        "includeAll": true,
+        "allValue": ".*",
+        "multi": true,
+        "current": {
+          "text": "All",
+          "value": "$__all"
+        }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Disponibilidad de los servicios",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "pfm2-prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 0
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "pfm2_servicio_up{tenant=~\"$tenant\",entorno=~\"$entorno\"}",
+          "legendFormat": "{{tenant}} · {{rol}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "min": 0,
+          "max": 1,
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 10
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "CPU por instancia",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "pfm2-prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 0
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "pfm2_cpu_ratio{tenant=~\"$tenant\",entorno=~\"$entorno\"}",
+          "legendFormat": "{{tenant}} · {{rol}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 10
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Memoria por instancia",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "pfm2-prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "pfm2_memoria_ratio{tenant=~\"$tenant\",entorno=~\"$entorno\"}",
+          "legendFormat": "{{tenant}} · {{rol}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 10
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Latencia de la sonda de API",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "pfm2-prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "pfm2_api_latencia_seconds{tenant=~\"$tenant\",entorno=~\"$entorno\"}",
+          "legendFormat": "{{tenant}} · {{rol}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 10
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Errores HTTP 5xx de API en cinco minutos",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "pfm2-prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 16
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "pfm2_api_errores_5m{tenant=~\"$tenant\",entorno=~\"$entorno\"}",
+          "legendFormat": "{{tenant}} · {{rol}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 10
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Estado de MySQL",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "pfm2-prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 16
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "pfm2_servicio_up{tenant=~\"$tenant\",entorno=~\"$entorno\",rol=\"database\"}",
+          "legendFormat": "{{tenant}} · {{rol}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "min": 0,
+          "max": 1,
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 10
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "Alertas activas",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "pfm2-prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 24
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "ALERTS{alertstate=\"firing\",tenant=~\"$tenant\",entorno=~\"$entorno\"}",
+          "legendFormat": "{{tenant}} · {{alertname}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 10
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "Disponibilidad del muestreo",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "pfm2-prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 24
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "pfm2_muestra_up{tenant=~\"$tenant\",entorno=~\"$entorno\"}",
+          "legendFormat": "{{tenant}} · {{rol}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "min": 0,
+          "max": 1,
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 10
+          }
+        },
+        "overrides": []
+      }
+    }
+  ]
+}

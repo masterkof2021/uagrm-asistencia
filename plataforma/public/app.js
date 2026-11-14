@@ -12,10 +12,22 @@ let sondeo;
 let listaRenderizada;
 let sondeoAlertas;
 let consultaAlertas;
+let actividad;
+const herramientas = {
+  panel: 'Panel', packer: 'Packer · AMI', opentofu: 'OpenTofu', pulumi: 'Pulumi',
+  terraform: 'Terraform', cloudformation: 'CloudFormation', scanners: 'Escáneres',
+  'cloud-init': 'cloud-init', ansible: 'Ansible', monitoreo: 'Grafana · Prometheus',
+  ssm: 'Systems Manager', ec2: 'Amazon EC2',
+};
+const nombresOperaciones = {
+  registrar: 'Registro', desplegar: 'Despliegue', suspender: 'Suspensión', reanudar: 'Reanudación',
+  'preparar-retiro': 'Preparación del retiro', retirar: 'Retiro', 'cancelar-retiro': 'Cancelación del retiro',
+};
 const estados = {
   registrado: 'Registrado', 'en-cola': 'En cola', 'en-curso': 'En curso',
   listo: 'Operativo', suspendido: 'Suspendido', error: 'Con error',
   'retiro-pendiente': 'Retiro pendiente', retirado: 'Retirado',
+  cancelado: 'Cancelado', confirmado: 'Confirmado',
 };
 const operaciones = {
   desplegar: { ruta: 'despliegues', etiqueta: 'Desplegar en AWS', nota: 'Crea recursos facturables.' },
@@ -98,7 +110,6 @@ function filaTenant(tenant) {
   institucion.append(nodo('strong', tenant.nombre), nodo('small', tenant.identificador));
   const estado = nodo('td');
   estado.append(nodo('span', estados[tenant.estado] ?? tenant.estado, 'etiqueta'));
-  if (tenant.fase_despliegue) estado.append(nodo('small', tenant.fase_despliegue));
   const accion = nodo('td');
   const tipo = tenant.estado === 'error' ?
     (tenant.tipo_despliegue === 'retirar' ? 'preparar-retiro' : tenant.tipo_despliegue ?? 'desplegar') :
@@ -126,10 +137,16 @@ function filaTenant(tenant) {
     boton.addEventListener('click', () => mostrarRetiro(tenant, boton));
     accion.append(boton);
   }
-  const historial = nodo('button', 'Ver historial', 'secundario');
-  historial.type = 'button';
-  historial.addEventListener('click', () => mostrarHistorial(tenant));
-  accion.append(historial);
+  const verActividad = nodo('button', 'Ver actividad', 'secundario');
+  verActividad.type = 'button';
+  verActividad.dataset.tenant = tenant.identificador;
+  verActividad.setAttribute('aria-controls', 'actividad-tenant');
+  verActividad.setAttribute('aria-expanded', String(actividad?.tenant === tenant.identificador));
+  verActividad.addEventListener('click', () => {
+    if (actividad?.tenant === tenant.identificador) cerrarActividad(true);
+    else abrirActividad(tenant);
+  });
+  accion.append(verActividad);
   if (tenant.puerto_local) {
     const url = `http://127.0.0.1:${tenant.puerto_local}`;
     if (tenant.estado === 'listo' && /^i-[a-f0-9]{8}(?:[a-f0-9]{9})?$/.test(tenant.frontend_id ?? '')) {
@@ -160,45 +177,145 @@ function filaTenant(tenant) {
   return fila;
 }
 
-async function mostrarHistorial(tenant) {
-  const dialogo = porId('historial-despliegues');
-  const detalle = porId('detalle-historial');
-  porId('titulo-historial').textContent = `Historial de ${tenant.nombre}`;
-  detalle.replaceChildren(nodo('p', 'Cargando historial…'));
-  dialogo.showModal();
+function actualizarBotonesActividad() {
+  for (const boton of porId('filas').querySelectorAll('[data-tenant]')) {
+    boton.setAttribute('aria-expanded', String(actividad?.tenant === boton.dataset.tenant));
+  }
+}
+
+function cerrarActividad(devolverFoco = false) {
+  if (!actividad) return;
+  const tenant = actividad.tenant;
+  actividad.consulta?.abort();
+  clearTimeout(actividad.sondeo);
+  actividad = undefined;
+  porId('actividad-tenant').hidden = true;
+  actualizarBotonesActividad();
+  if (devolverFoco) {
+    const boton = porId('filas').querySelector(`[data-tenant="${tenant}"]`);
+    (boton ?? porId('nav-tenants')).focus();
+  }
+}
+
+function abrirActividad(tenant) {
+  cerrarActividad();
+  actividad = { tenant: tenant.identificador };
+  porId('titulo-actividad').textContent = tenant.nombre;
+  porId('id-actividad').textContent = tenant.identificador;
+  porId('estado-actividad').textContent = 'Cargando actividad…';
+  for (const id of ['eventos-actividad', 'resultados-actividad', 'auditoria-actividad']) porId(id).replaceChildren();
+  for (const id of ['selector-actividad', 'monitoreo-actividad', 'escaneos-actividad']) porId(id).hidden = true;
+  for (const detalle of porId('actividad-tenant').querySelectorAll('details')) detalle.open = false;
+  porId('actividad-tenant').hidden = false;
+  porId('actividad-tenant').querySelector('.actividad-contenido').scrollTop = 0;
+  porId('cerrar-actividad').focus();
+  actualizarBotonesActividad();
+  cargarActividad(actividad);
+}
+
+function distintivo(herramienta) {
+  return nodo('span', herramientas[herramienta] ?? herramientas.panel,
+    `actividad-herramienta herramienta-${Object.hasOwn(herramientas, herramienta) ? herramienta : 'panel'}`);
+}
+
+function filaActividad(evento) {
+  const fila = nodo('li', '', 'actividad-evento');
+  const cabecera = nodo('div', '', 'actividad-meta');
+  cabecera.append(distintivo(evento.herramienta));
+  const nivel = { exito: 'Correcto', aviso: 'Aviso', error: 'Error' }[evento.nivel];
+  if (nivel) cabecera.append(nodo('span', nivel, `actividad-nivel nivel-${evento.nivel}`));
+  const hora = nodo('time', formatearFechaAlerta(evento.fecha));
+  hora.dateTime = evento.fecha;
+  cabecera.append(hora);
+  fila.append(cabecera, nodo('p', evento.mensaje));
+  return fila;
+}
+
+function mostrarMonitoreo(monitor) {
+  const seccion = porId('monitoreo-actividad');
+  seccion.hidden = !monitor;
+  if (!monitor) return;
+  const encabezado = nodo('div', '', 'actividad-meta');
+  encabezado.append(distintivo('monitoreo'));
+  const grafana = nodo('a', 'Abrir Grafana');
+  grafana.href = 'http://127.0.0.1:3000/d/pfm2-tenants';
+  grafana.target = '_blank';
+  grafana.rel = 'noopener noreferrer';
+  encabezado.append(grafana);
+  let muestra = 'El colector está esperando una primera muestra.';
+  if (!monitor.habilitado) muestra = 'El colector sondea los tenants operativos.';
+  else if (monitor.midiendo) muestra = 'Systems Manager está tomando muestras de este tenant.';
+  else if (monitor.fallo) muestra = 'El colector no pudo completar el último ciclo.';
+  else if (monitor.ultimaMuestra) {
+    const { respondieron, fecha } = monitor.ultimaMuestra;
+    muestra = `Último sondeo · ${respondieron} de 3 capas con muestra válida · ${formatearFechaAlerta(fecha)}.`;
+  }
+  const prometheus = {
+    disponible: `Reglas de Prometheus disponibles · ${formatearFechaAlerta(monitor.ultimaConsulta)}.`,
+    iniciando: 'Esperando la primera lectura de Prometheus.',
+    'sin-datos': 'Prometheus no devolvió una lectura válida de sus reglas.',
+  }[monitor.fuente];
+  seccion.replaceChildren(encabezado, nodo('p', muestra), nodo('p', prometheus));
+}
+
+function renderizarActividad(datos) {
+  const { operaciones, operacion, eventos, escaneos, auditoria, monitoreo } = datos;
+  const cambioOperacion = actividad.mostrada !== operacion;
+  actividad.mostrada = operacion;
+  const selector = porId('operacion-actividad');
+  selector.replaceChildren(new Option('Más reciente', ''), ...operaciones.map(({ id, tipo, estado }) =>
+    new Option(`#${id} · ${nombresOperaciones[tipo] ?? tipo} · ${estados[estado] ?? estado}`, id)));
+  selector.value = actividad.operacion ?? '';
+  porId('selector-actividad').hidden = !operaciones.length;
+  const trabajo = operaciones.find(({ id }) => id === operacion);
+  porId('estado-actividad').textContent = trabajo
+    ? `${estados[trabajo.estado] ?? trabajo.estado} · ${nombresOperaciones[trabajo.tipo] ?? trabajo.tipo} #${trabajo.id}`
+    : 'Esta institución todavía no tiene operaciones.';
+  const lineas = eventos.length || !trabajo ? eventos : [{
+    herramienta: 'panel', nivel: trabajo.estado === 'error' ? 'error' : 'info',
+    mensaje: trabajo.fase, fecha: trabajo.actualizado,
+  }];
+  porId('eventos-actividad').replaceChildren(...lineas.toReversed().map(filaActividad));
+  if (cambioOperacion) porId('actividad-tenant').querySelector('.actividad-contenido').scrollTop = 0;
+  porId('escaneos-actividad').hidden = !escaneos.length;
+  const nombres = { trivy: 'Trivy', gitleaks: 'Gitleaks', conftest: 'Conftest' };
+  porId('resultados-actividad').replaceChildren(...escaneos.map((control) => {
+    const resultado = control.estado === 'error' ? 'Error de ejecución' :
+      control.hallazgos === 0 ? 'Sin hallazgos' : `${control.hallazgos} hallazgos`;
+    const item = nodo('li', `${nombres[control.nombre]} ${control.version ?? ''} · ${resultado}`);
+    item.append(nodo('small', `${control.alcance ?? ''} · ${formatearFechaAlerta(control.fecha)}`));
+    if (control.reglas?.length) item.append(nodo('small', control.reglas.join(', ')));
+    return item;
+  }));
+  porId('auditoria-actividad').replaceChildren(...(auditoria.length ? auditoria.map((evento) => {
+    const trabajoId = evento.trabajo_id ? ` · Operación #${evento.trabajo_id}` : '';
+    return nodo('li', `${nombresOperaciones[evento.accion] ?? evento.accion} · ${evento.operador} · ${formatearFechaAlerta(evento.fecha)}${trabajoId}`);
+  }) : [nodo('li', 'Sin actividad atribuida a un operador.')]));
+  mostrarMonitoreo(monitoreo);
+}
+
+async function cargarActividad(vista) {
+  vista.consulta?.abort();
+  clearTimeout(vista.sondeo);
+  const consulta = new AbortController();
+  vista.consulta = consulta;
   try {
-    const ruta = `/api/tenants/${tenant.identificador}`;
-    const [historial, auditoria] = await Promise.all([api(`${ruta}/despliegues`), api(`${ruta}/auditoria`)]);
-    const intentos = historial.filter(({ tipo }) => tipo === 'desplegar');
-    const nombres = { trivy: 'Trivy', gitleaks: 'Gitleaks', conftest: 'Conftest' };
-    detalle.replaceChildren(...intentos.map((intento) => {
-      const seccion = nodo('section');
-      seccion.append(nodo('h3', `Intento ${intento.id} · ${estados[intento.estado] ?? intento.estado}`),
-        nodo('p', intento.fase));
-      const controles = nodo('ul');
-      for (const control of intento.escaneos ?? []) {
-        const resultado = control.estado === 'error' ? 'Error de ejecución' :
-          control.hallazgos === 0 ? 'Sin hallazgos' : `${control.hallazgos} hallazgos`;
-        const item = nodo('li', `${nombres[control.nombre]} ${control.version ?? ''} · ${resultado}`);
-        item.append(nodo('small', `${control.alcance} · ${fechaAlerta.format(new Date(control.fecha))}`));
-        if (control.reglas.length) item.append(nodo('small', control.reglas.join(', ')));
-        controles.append(item);
-      }
-      seccion.append(controles.childElementCount ? controles : nodo('p', 'Sin escaneos registrados.'));
-      return seccion;
-    }));
-    if (!intentos.length) detalle.append(nodo('p', 'Esta institución todavía no tiene intentos de despliegue.'));
-    const actividad = nodo('ul');
-    const acciones = { registrar: 'Registro', desplegar: 'Despliegue', suspender: 'Suspensión', reanudar: 'Reanudación',
-      'preparar-retiro': 'Preparación del retiro', retirar: 'Confirmación del retiro', 'cancelar-retiro': 'Cancelación del retiro' };
-    for (const evento of auditoria) {
-      const trabajo = evento.trabajo_id ? ` · Operación ${evento.trabajo_id}` : '';
-      actividad.append(nodo('li', `${acciones[evento.accion]} · ${evento.operador} · ${fechaAlerta.format(new Date(evento.fecha))}${trabajo}`));
+    const operacion = vista.operacion ? `?operacion=${vista.operacion}` : '';
+    const datos = await api(`/api/tenants/${vista.tenant}/actividad${operacion}`, { signal: consulta.signal });
+    if (consulta.signal.aborted) return;
+    const serializado = JSON.stringify(datos);
+    if (vista.ultimaLectura !== serializado || vista.seleccionRenderizada !== vista.operacion) {
+      renderizarActividad(datos);
+      vista.ultimaLectura = serializado;
+      vista.seleccionRenderizada = vista.operacion;
     }
-    detalle.append(nodo('h3', 'Actividad del operador'),
-      actividad.childElementCount ? actividad : nodo('p', 'Sin actividad atribuida a un operador.'));
   } catch {
-    detalle.replaceChildren(nodo('p', 'No se pudo consultar el historial.'));
+    if (!consulta.signal.aborted) {
+      vista.ultimaLectura = undefined;
+      porId('estado-actividad').textContent = 'No se pudo actualizar la actividad. Volviendo a intentar…';
+    }
+  } finally {
+    if (!consulta.signal.aborted) vista.sondeo = setTimeout(() => cargarActividad(vista), 2000);
   }
 }
 
@@ -256,6 +373,11 @@ async function iniciarOperacion(tenant, operacion, boton) {
     await api(`/api/tenants/${tenant.identificador}/${operacion.ruta}`, { method: 'POST' });
     resultado.className = 'exito';
     resultado.textContent = `La operación para ${tenant.nombre} está en cola.`;
+    if (actividad?.tenant === tenant.identificador) {
+      actividad.operacion = undefined;
+      porId('operacion-actividad').value = '';
+      cargarActividad(actividad);
+    }
     cargarTenants();
   } catch (error) {
     resultado.className = 'aviso';
@@ -279,7 +401,10 @@ async function cargarTenants(enSegundoPlano = false) {
     if (consulta.signal.aborted) return;
     const serializado = JSON.stringify(tenants);
     if (listaRenderizada !== serializado) {
-      porId('filas').replaceChildren(...tenants.map(filaTenant));
+      const botonEnFoco = document.activeElement?.dataset.tenant;
+      const filas = porId('filas');
+      filas.replaceChildren(...tenants.map(filaTenant));
+      if (botonEnFoco) filas.querySelector(`[data-tenant="${botonEnFoco}"]`)?.focus();
       listaRenderizada = serializado;
     }
     porId('tabla').hidden = tenants.length === 0;
@@ -362,6 +487,7 @@ function cambiarVista() {
     }
   }
   if (!lista) {
+    cerrarActividad();
     consultaActiva?.abort();
     clearTimeout(sondeo);
   }
@@ -413,6 +539,17 @@ formulario.addEventListener('submit', async (evento) => {
 filtros.addEventListener('submit', (evento) => {
   evento.preventDefault();
   if (catalogo) cargarTenants();
+});
+porId('cerrar-actividad').addEventListener('click', () => cerrarActividad(true));
+porId('actividad-tenant').addEventListener('keydown', (evento) => {
+  if (evento.key === 'Escape') {
+    evento.preventDefault();
+    cerrarActividad(true);
+  }
+});
+porId('operacion-actividad').addEventListener('change', ({ target }) => {
+  actividad.operacion = target.value || undefined;
+  cargarActividad(actividad);
 });
 window.addEventListener('hashchange', cambiarVista);
 porId('salir').addEventListener('click', async () => {

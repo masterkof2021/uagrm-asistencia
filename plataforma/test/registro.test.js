@@ -61,6 +61,7 @@ test('exige sesión para operar, atribuye el registro y despliegue y mantiene m�
   t.after(async () => { await cerrar(); registro.cerrar(); });
   assert.match(await (await fetch(url)).text(), /Iniciar sesión/);
   assert.equal((await fetch(`${url}/api/tenants`)).status, 401);
+  assert.equal((await fetch(`${url}/api/tenants/san-marcos/actividad`)).status, 401);
   assert.equal((await registrar(fetch, url, solicitud)).status, 401);
   assert.equal(await (await fetch(`${url}/metrics`)).text(), 'pfm2_demo 1\n');
   const sesion = await ingresar(url, administrador);
@@ -194,7 +195,7 @@ test('la API encola un despliegue único y permite reintentar sin perder el hist
   let intentos = 0;
   const detener = iniciarTrabajador(registro, tmpdir(), async ({ tenant, progreso, guardarEscaneos }) => {
     assert.equal(tenant.identificador, solicitud.identificador);
-    progreso('Plan verificado.');
+    progreso('Plan verificado.', 'opentofu', 'exito');
     intentos += 1;
     guardarEscaneos([{ nombre: 'trivy', estado: intentos === 1 ? 'error' : 'hallazgos',
       hallazgos: intentos === 1 ? null : 2 }]);
@@ -219,12 +220,28 @@ test('la API encola un despliegue único y permite reintentar sin perder el hist
 
   const [fallido] = await esperarEstado('error');
   assert.equal(fallido.fase, 'Falló la comprobación de arranque.');
+  const actividad = `${url}/api/tenants/${solicitud.identificador}/actividad`;
+  const registroFallido = await (await pedir(actividad)).json();
+  assert.equal(registroFallido.operacion, fallido.id);
+  assert.deepEqual(registroFallido.eventos.map(({ herramienta, nivel }) => [herramienta, nivel]), [
+    ['panel', 'info'], ['panel', 'info'], ['opentofu', 'exito'], ['opentofu', 'error'],
+  ]);
+  assert.equal(registroFallido.escaneos[0].estado, 'error');
+  assert.equal(registroFallido.auditoria[0].trabajo_id, fallido.id);
+  assert.equal((await registrar(pedir, url, { ...solicitud, identificador: 'otro-tenant' })).status, 201);
+  assert.equal((await pedir(`${url}/api/tenants/otro-tenant/actividad?operacion=${fallido.id}`)).status, 404);
   assert.equal((await iniciarDespliegue()).status, 202);
   const historial = await esperarEstado('listo');
   assert.deepEqual(historial.map(({ estado }) => estado), ['listo', 'error']);
   assert.deepEqual(historial.map(({ escaneos }) => escaneos[0].estado), ['hallazgos', 'error']);
   assert.equal(historial[0].salida.instancias.frontend, 'i-ejemplo');
-  const [institucion] = await (await pedir(`${url}/api/tenants`)).json();
+  const ultimaActividad = await (await pedir(actividad)).json();
+  assert.equal(ultimaActividad.operacion, historial[0].id);
+  assert.equal(ultimaActividad.eventos.at(-1).mensaje, 'Los tres servicios están operativos.');
+  const anterior = await (await pedir(`${actividad}?operacion=${fallido.id}`)).json();
+  assert.deepEqual(anterior.eventos, registroFallido.eventos);
+  const instituciones = await (await pedir(`${url}/api/tenants`)).json();
+  const institucion = instituciones.find(({ identificador }) => identificador === solicitud.identificador);
   assert.equal(institucion.puerto_local, 8081);
   assert.equal(institucion.frontend_id, 'i-ejemplo');
   assert.equal((await iniciarDespliegue()).status, 409);

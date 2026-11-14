@@ -151,11 +151,34 @@
       </section>
     </div>
   </main>
-  <dialog id="historial-despliegues" aria-labelledby="titulo-historial">
-    <h2 id="titulo-historial">Historial de despliegues</h2>
-    <div id="detalle-historial"></div>
-    <form method="dialog"><button class="secundario">Cerrar</button></form>
-  </dialog>
+  <aside id="actividad-tenant" class="actividad" aria-labelledby="titulo-actividad" hidden>
+    <header class="actividad-cabecera">
+      <div>
+        <p class="actividad-seccion">Actividad del tenant</p>
+        <h2 id="titulo-actividad"></h2>
+        <p id="id-actividad"></p>
+      </div>
+      <button id="cerrar-actividad" type="button" class="secundario">Cerrar</button>
+    </header>
+    <div class="actividad-contenido">
+      <label id="selector-actividad" hidden>Operación
+        <select id="operacion-actividad"></select>
+      </label>
+      <p id="estado-actividad" role="status"></p>
+      <section id="monitoreo-actividad" aria-label="Monitoreo" class="actividad-monitor" hidden></section>
+      <section aria-label="Registro de ejecución">
+        <ol id="eventos-actividad" class="actividad-eventos"></ol>
+      </section>
+      <details id="escaneos-actividad" hidden>
+        <summary>Resultados de escaneo</summary>
+        <ul id="resultados-actividad"></ul>
+      </details>
+      <details>
+        <summary>Actividad del operador</summary>
+        <ul id="auditoria-actividad"></ul>
+      </details>
+    </div>
+  </aside>
   <dialog id="revision-retiro" aria-labelledby="titulo-retiro">
     <h2 id="titulo-retiro">Revisar retiro</h2>
     <p id="impacto-retiro"></p>

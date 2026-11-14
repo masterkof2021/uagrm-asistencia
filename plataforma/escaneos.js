@@ -28,7 +28,7 @@ function resumir(codigo, permitidos, hallazgos) {
   return { hallazgos: reglas.length, reglas: [...new Set(reglas)].slice(0, 30) };
 }
 
-export async function escanearDespliegue({ motor, directorio, archivo, instancias }) {
+export async function escanearDespliegue({ motor, directorio, archivo, instancias, informar = () => {} }) {
   const dir = join(directorio, 'escaneos');
   await mkdir(dir, { recursive: true });
   const ejecutarLocal = (nombre, args) => ejecutar(herramienta(nombre), args, dir);
@@ -89,6 +89,8 @@ export async function escanearDespliegue({ motor, directorio, archivo, instancia
 
   const resultados = [];
   for (const [nombre, alcance, comprobar] of controles) {
+    const etiqueta = { trivy: 'Trivy', gitleaks: 'Gitleaks', conftest: 'Conftest' }[nombre];
+    informar(`Ejecutando ${etiqueta}. ${alcance}.`);
     const fecha = new Date().toISOString();
     let version = null;
     try {
@@ -96,9 +98,12 @@ export async function escanearDespliegue({ motor, directorio, archivo, instancia
       version = v.stdout.match(/\b\d+\.\d+\.\d+\b/)?.[0] ?? null;
       if (v.codigo !== 0 || !version) throw new Error('Versión no disponible');
       const resumen = await comprobar();
+      informar(`${etiqueta} ${version}: ${resumen.hallazgos} hallazgos.`,
+        resumen.hallazgos ? 'aviso' : 'exito');
       resultados.push({ nombre, alcance, fecha, version,
         estado: resumen.hallazgos ? 'hallazgos' : 'sin-hallazgos', ...resumen });
     } catch {
+      informar(`${etiqueta} no completó el escaneo.`, 'error');
       resultados.push({ nombre, alcance, fecha, version, estado: 'error', hallazgos: null, reglas: [] });
     }
   }

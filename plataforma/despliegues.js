@@ -110,8 +110,9 @@ function revisarPlan(plan, tenant) {
 
 async function revisarSeguridad(config, motor, directorio, archivo, instancias, progreso, guardarEscaneos) {
   if (!config.escaneos) return;
-  progreso('Ejecutando Trivy, Gitleaks y Conftest.');
-  const resultados = await escanearDespliegue({ motor, directorio, archivo, instancias });
+  const resultados = await escanearDespliegue({ motor, directorio, archivo, instancias,
+    informar: (mensaje, nivel) => progreso(mensaje, 'scanners', nivel),
+  });
   guardarEscaneos(resultados);
   const fallos = resultados.filter(({ estado }) => estado === 'error').map(({ nombre }) => nombre);
   if (fallos.length) throw new Error(`Escaneo incompleto (${fallos.join(', ')}). Revisa las herramientas y reintenta.`);
@@ -146,6 +147,18 @@ export async function seleccionarAmi(aws, directorio, { amiPersonalizada, cuenta
   }
 }
 
+async function prepararArranque(aws, directorio, config, progreso) {
+  const ansible = await seleccionarArranque(directorio, config);
+  progreso(config.amiPersonalizada ? 'Validando o reutilizando la AMI privada configurada.' :
+    'Resolviendo la AMI base de Amazon Linux o reutilizando la imagen fijada.',
+    config.amiPersonalizada ? 'packer' : 'ec2');
+  const ami = await seleccionarAmi(aws, directorio, config);
+  if (config.amiPersonalizada) progreso(`AMI fijada para el tenant: ${ami}.`, 'packer', 'exito');
+  progreso('Preparando los datos de arranque de las tres EC2.', 'cloud-init');
+  if (ansible) progreso('Preparando los playbooks de las tres capas para el primer arranque.', 'ansible');
+  return { ami, ansible };
+}
+
 async function seleccionarArranque(directorio, config) {
   const ruta = join(directorio, 'arranque.txt');
   try {
@@ -165,7 +178,8 @@ async function seleccionarArranque(directorio, config) {
   return (await readFile(ruta, 'utf8')) === 'ansible';
 }
 
-async function comprobarArranque(aws, servidores) {
+async function comprobarArranque(aws, servidores, progreso, ansible = false) {
+  progreso('Esperando que los agentes de las tres EC2 estén en línea.', 'ssm');
   const ids = esperado.map((rol) => servidores[rol].id);
   const filtro = `Key=InstanceIds,Values=${ids.join(',')}`;
   for (let intento = 0; intento < 30; intento++) {
@@ -174,11 +188,13 @@ async function comprobarArranque(aws, servidores) {
     if (intento === 29) throw new Error('AWS creó las EC2, pero Systems Manager aún no las detecta.');
     await esperar(5000);
   }
-  await comprobarServicios(aws, servidores, {
+  progreso('Comprobando que cloud-init termine en las tres EC2 y validando los servicios.', 'cloud-init');
+  if (ansible) progreso('Esperando la finalización de los playbooks ejecutados por cloud-init.', 'ansible');
+  await comprobarServicios(aws, servidores, progreso, {
     database: 'systemctl is-active mysqld',
     backend: 'systemctl is-active asistencia',
   });
-  await comprobarServicios(aws, servidores, {
+  await comprobarServicios(aws, servidores, progreso, {
     frontend: `systemctl is-active nginx && curl -fsS -o /dev/null --max-time 10 http://127.0.0.1/ &&
       for intento in $(seq 1 24); do
         if [ "$(curl -sS -o /dev/null -w '%{http_code}' --max-time 5 http://127.0.0.1/api/me)" = 401 ]; then exit 0; fi
@@ -186,10 +202,14 @@ async function comprobarArranque(aws, servidores) {
       done
       exit 1`,
   });
+  progreso('Arranque completado en las tres EC2.', 'cloud-init', 'exito');
+  if (ansible) progreso('Arranque con los playbooks verificado en las tres EC2.', 'ansible', 'exito');
 }
 
-async function comprobarServicios(aws, servidores, comandos) {
+async function comprobarServicios(aws, servidores, progreso, comandos) {
+  const servicios = { database: 'MySQL', backend: 'API Node.js', frontend: 'Nginx y acceso a la API' };
   const solicitudes = await Promise.all(Object.entries(comandos).map(async ([rol, comando]) => {
+    progreso(`Comprobando ${servicios[rol]}.`, 'ssm');
     const parametros = JSON.stringify({
       commands: ['set -e', 'cloud-init status --wait', comando],
       executionTimeout: ['600'],
@@ -204,7 +224,10 @@ async function comprobarServicios(aws, servidores, comandos) {
       const { CommandInvocations } = await aws('ssm', 'list-command-invocations',
         '--command-id', solicitud.comando, '--instance-id', solicitud.id);
       const estado = CommandInvocations[0]?.Status;
-      if (estado === 'Success') pendientes.delete(solicitud);
+      if (estado === 'Success') {
+        pendientes.delete(solicitud);
+        progreso(`${servicios[solicitud.rol]} verificado.`, 'ssm', 'exito');
+      }
       if (['Failed', 'TimedOut', 'Cancelled'].includes(estado)) {
         throw new Error(`El servicio ${solicitud.rol} no inició. Revisa cloud-init en Systems Manager.`);
       }
@@ -239,8 +262,7 @@ export async function desplegarHcl({ config, directorio, datosTenant, tenant, pr
   const motor = motorHcl(tenant.motor);
   const ejecutarHcl = (...args) => ejecutarComando(motor, args, { cwd, env });
   const nombre = motor === 'terraform' ? 'Terraform' : 'OpenTofu';
-  const ansible = await seleccionarArranque(datosTenant, config);
-  const ami = await seleccionarAmi(aws, datosTenant, config);
+  const { ami, ansible } = await prepararArranque(aws, datosTenant, config, progreso);
   const variables = {
     account_id: config.cuenta, tenant_id: tenant.identificador, environment: tenant.entorno,
     plan: tenant.plan.id, ami_id: ami, permissions_boundary_arn: config.limite, managed_by: nombre,
@@ -248,11 +270,11 @@ export async function desplegarHcl({ config, directorio, datosTenant, tenant, pr
   };
   const clave = claveHcl(tenant);
   await writeFile(join(cwd, 'tenant.tfvars.json'), JSON.stringify(variables));
-  progreso('Conectando con el estado remoto en S3.');
+  progreso(`Ejecutando ${nombre} init con el estado del tenant en S3.`);
   await ejecutarHcl('init', '-input=false', '-no-color', '-lock-timeout=30s',
     `-backend-config=bucket=${config.bucket}`, `-backend-config=key=${clave}`,
     `-backend-config=workspace_key_prefix=tenants/panel/${motor === 'terraform' ? 'terraform/' : ''}workspaces`);
-  progreso(`Generando y revisando el plan de ${nombre}.`);
+  progreso(`Ejecutando ${nombre} plan y revisando los cambios propuestos.`);
   await ejecutarHcl('plan', '-input=false', '-no-color', '-lock-timeout=30s', '-var-file=tenant.tfvars.json', '-out=tenant.tfplan');
   const planJson = await ejecutarHcl('show', '-json', 'tenant.tfplan');
   const plan = JSON.parse(planJson);
@@ -272,15 +294,15 @@ export async function desplegarHcl({ config, directorio, datosTenant, tenant, pr
       await rm(archivo, { force: true });
     }
   }
-  progreso('Aprovisionando la red y las tres instancias en AWS.');
+  progreso(`Ejecutando ${nombre} apply para aprovisionar la red y las tres EC2.`);
   await ejecutarHcl('apply', '-input=false', '-no-color', '-lock-timeout=30s', 'tenant.tfplan');
   const outputs = JSON.parse(await ejecutarHcl('output', '-json'));
   const versiones = JSON.parse(await ejecutarHcl('version', '-json'));
   const servidores = outputs.instances.value;
   const instancias = Object.fromEntries(esperado.map((rol) => [rol, servidores[rol].id]));
+  progreso('Verificando el inventario de las tres EC2 y sus discos raíz.', 'ec2');
   const discos = await describirInstancias(aws, tenant.identificador, instancias);
-  progreso('Verificando Nginx, la API y MySQL mediante Systems Manager.');
-  await comprobarArranque(aws, servidores);
+  await comprobarArranque(aws, servidores, progreso, ansible);
   return {
     instancias,
     volumenes: Object.fromEntries(discos.map(({ rol, volumen }) => [rol, volumen])),
@@ -295,8 +317,7 @@ export async function desplegarHcl({ config, directorio, datosTenant, tenant, pr
 export async function desplegarCloudFormation({ config, directorio, datosTenant, tenant, progreso, guardarEscaneos, ejecutarComando = ejecutar }) {
   await mkdir(directorio, { recursive: true });
   const { aws, env } = await conectarAws(config, ejecutarComando, directorio);
-  const ansible = await seleccionarArranque(datosTenant, config);
-  const ami = await seleccionarAmi(aws, datosTenant, config);
+  const { ami, ansible } = await prepararArranque(aws, datosTenant, config, progreso);
   const { Images } = await aws('ec2', 'describe-images', '--image-ids', ami);
   if (Images.length !== 1 || Images[0].RootDeviceType !== 'ebs' || Images[0].Architecture !== 'x86_64' ||
       !Images[0].RootDeviceName) throw new Error('La AMI fijada no tiene un disco raíz EBS x86_64.');
@@ -322,9 +343,9 @@ export async function desplegarCloudFormation({ config, directorio, datosTenant,
       Object.values(instancias).some((id) => !/^i-[0-9a-f]{8}(?:[0-9a-f]{9})?$/.test(id ?? ''))) {
     throw new Error('La pila no devolvió los identificadores de las tres capas.');
   }
+  progreso('Verificando el inventario de las tres EC2 y sus discos raíz.', 'ec2');
   const discos = await describirInstancias(aws, tenant.identificador, instancias);
-  progreso('Verificando Nginx, la API y MySQL mediante Systems Manager.');
-  await comprobarArranque(aws, Object.fromEntries(discos.map(({ rol, id }) => [rol, { id }])));
+  await comprobarArranque(aws, Object.fromEntries(discos.map(({ rol, id }) => [rol, { id }])), progreso, ansible);
   return {
     pila: pila.StackId, instancias,
     volumenes: Object.fromEntries(discos.map(({ rol, volumen }) => [rol, volumen])),
@@ -339,12 +360,11 @@ export async function desplegarPulumi({ config, directorio, datosTenant, tenant,
   if (!ejecutable.test(tenant.identificador)) throw new Error('El identificador del tenant no es válido.');
   await mkdir(directorio, { recursive: true });
   const { aws, env } = await conectarAws(config, ejecutarComando, directorio);
-  const ansible = await seleccionarArranque(datosTenant, config);
-  const ami = await seleccionarAmi(aws, datosTenant, config);
+  const { ami, ansible } = await prepararArranque(aws, datosTenant, config, progreso);
   const cwd = await prepararProgramaPulumi(datosTenant, tenant, { ...config, ami, ansible });
   progreso('Abriendo el estado remoto de Pulumi en S3.');
   const pila = await abrirPilaPulumi({ ejecutar: ejecutarComando, env, config, cwd, tenant, crear: true });
-  progreso('Generando y revisando la vista previa de Pulumi.');
+  progreso('Ejecutando Pulumi preview y revisando los cambios propuestos.');
   const archivo = join(directorio, 'pulumi-plan.json');
   const preview = JSON.parse(await pila.ejecutar('preview', '--json', '--show-sames', '--save-plan', archivo));
   revisarPreviewPulumi(preview, tenant);
@@ -360,13 +380,13 @@ export async function desplegarPulumi({ config, directorio, datosTenant, tenant,
       });
     await revisarSeguridad(config, tenant.motor, directorio, join(cwd, 'package-lock.json'), instancias, progreso, guardarEscaneos);
   }
-  progreso('Aplicando el plan de Pulumi para el tenant.');
+  progreso('Ejecutando Pulumi up con el plan del tenant.');
   await pila.ejecutar('up', '--plan', archivo, '--yes', '--skip-preview');
   const salidas = JSON.parse(await pila.ejecutar('stack', 'output', '--json'));
   const instancias = Object.fromEntries(esperado.map((rol) => [rol, salidas.instances?.[rol]?.id]));
+  progreso('Verificando el inventario de las tres EC2 y sus discos raíz.', 'ec2');
   const discos = await describirInstancias(aws, tenant.identificador, instancias);
-  progreso('Verificando Nginx, la API y MySQL mediante Systems Manager.');
-  await comprobarArranque(aws, salidas.instances);
+  await comprobarArranque(aws, salidas.instances, progreso, ansible);
   const paquetes = JSON.parse(await readFile(join(cwd, 'package-lock.json'), 'utf8')).packages;
   return {
     instancias, volumenes: Object.fromEntries(discos.map(({ rol, volumen }) => [rol, volumen])),
@@ -413,7 +433,7 @@ export async function cambiarEstadoEc2({ config, tenant, tipo, infraestructura, 
   const volumenes = infraestructura.volumenes ??
     Object.fromEntries(instancias.map(({ rol, volumen }) => [rol, volumen]));
   const solicitadas = new Set();
-  progreso(detener ? 'Deteniendo las tres EC2 y conservando sus discos.' : 'Encendiendo las tres EC2 del tenant.');
+  progreso(detener ? 'Deteniendo las tres EC2 y conservando sus discos.' : 'Encendiendo las tres EC2 del tenant.', 'ec2');
   for (let intento = 0; intento < 60; intento++) {
     for (const { rol, estado, volumen } of instancias) {
       if (!['running', 'stopped', 'pending', 'stopping'].includes(estado) || volumenes[rol] !== volumen) {
@@ -422,8 +442,7 @@ export async function cambiarEstadoEc2({ config, tenant, tipo, infraestructura, 
     }
     if (instancias.every(({ estado }) => estado === objetivo)) {
       if (!detener) {
-        progreso('Verificando Nginx, la API y MySQL mediante Systems Manager.');
-        await comprobarArranque(aws, Object.fromEntries(instancias.map(({ rol, id }) => [rol, { id }])));
+        await comprobarArranque(aws, Object.fromEntries(instancias.map(({ rol, id }) => [rol, { id }])), progreso);
       }
       return { ...infraestructura, volumenes };
     }
@@ -656,7 +675,12 @@ export function iniciarTrabajador(registro, directorio, ejecutarTrabajo) {
       const trabajo = registro.reclamar();
       if (!trabajo) return;
       const tenant = registro.obtener(trabajo.tenant_id);
-      const progreso = (fase) => registro.actualizar(trabajo.id, 'en-curso', fase);
+      let herramientaActual = ['suspender', 'reanudar'].includes(trabajo.tipo) ? 'ec2' : tenant.motor;
+      const herramientaMotor = herramientaActual;
+      const progreso = (fase, herramienta = herramientaMotor, nivel) => {
+        herramientaActual = herramienta;
+        registro.actualizar(trabajo.id, 'en-curso', fase, null, herramienta, nivel);
+      };
       const latido = setInterval(() => registro.tocar(trabajo.id), 10_000);
       try {
         const datosTenant = join(directorio, tenant.identificador);
@@ -679,7 +703,7 @@ export function iniciarTrabajador(registro, directorio, ejecutarTrabajo) {
         const mensaje = error.code === 'ENOENT' ? 'Comprueba las herramientas del motor y los archivos del despliegue.' :
           error.name === 'AbortError' ? 'El motor excedió el tiempo de espera.' :
           error.constructor === Error && !error.code ? error.message : 'El despliegue se interrumpió.';
-        registro.actualizar(trabajo.id, 'error', mensaje);
+        registro.actualizar(trabajo.id, 'error', mensaje, null, herramientaActual);
       } finally {
         clearInterval(latido);
       }

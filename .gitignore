@@ -20,3 +20,4 @@ tmp/
 /infra/opentofu/*.tfvars
 /infra/opentofu/*.tfvars.json
 /infra/.smoke-opentofu/
+/documentacion/

@@ -18,7 +18,7 @@ try {
 
 Abre el panel e inicia sesión. La sesión vence a las ocho horas o al reiniciar el proceso. El servicio escucha únicamente en la interfaz local. Los registros y la auditoría se guardan en `plataforma/data/tenants.sqlite`, fuera de Git. Las variables `PORT` y `TENANTS_DB` permiten seleccionar otro puerto o ruta de SQLite. [Panel local](http://127.0.0.1:4173)
 
-En **Tenants → Ver historial**, la sección **Actividad del operador** muestra quién registró el tenant o solicitó cada operación, su fecha en Bolivia y el número de trabajo cuando corresponde. La atribución se registra desde la instalación de esta versión.
+En **Tenants → Ver actividad**, la sección **Actividad del operador** muestra quién registró el tenant o solicitó cada operación, su fecha en Bolivia y el número de trabajo cuando corresponde. La auditoría conserva las atribuciones registradas previamente.
 
 Selecciona un plan y comprueba la memoria y el almacenamiento de las tres capas en el resumen. El entorno inicial es **Pruebas** y el motor inicial es **OpenTofu**. Las capacidades y los límites de estudiantes del catálogo son valores iniciales para la demo. El estado **Registrado** indica que el tenant está pendiente de aprovisionamiento. El panel está diseñado para un operador en su equipo local.
 
@@ -42,7 +42,7 @@ $env:PFM2_STATE_BUCKET = 'pfm2-state-487450071663-us-east-2'
 npm.cmd --prefix plataforma start
 ```
 
-En **Tenants**, elige **Desplegar en AWS** en un registro de OpenTofu. El botón crea recursos facturables. La tabla muestra la cola, el plan, el aprovisionamiento y la verificación por Systems Manager. El tenant pasa a **Operativo** cuando se comprueban sus tres servicios. Si falla, **Reintentar en AWS** usa la misma clave de estado en S3 y la AMI fijada para el tenant. Los intentos anteriores quedan en el historial.
+En **Tenants**, elige **Desplegar en AWS** en un registro de OpenTofu. El botón crea recursos facturables. **Ver actividad** abre un panel lateral con los eventos de ejecución, agrupados por operación y diferenciados por herramienta. El panel consulta novedades cada dos segundos mientras está abierto. El tenant pasa a **Operativo** cuando se comprueban sus tres servicios. Si falla, **Reintentar en AWS** usa la misma clave de estado en S3 y la AMI fijada para el tenant. El selector permite consultar intentos anteriores. Para las operaciones registradas antes de esta mejora, se conserva la última fase disponible, junto con los escaneos y la auditoría.
 
 Para un tenant de CloudFormation, usa el mismo flujo. El estado queda en la pila del tenant y el panel guarda su ARN, los recursos de las tres capas y la huella de la plantilla. [Operación con CloudFormation](../infra/cloudformation/README.md).
 
@@ -70,7 +70,7 @@ En Windows, instala los binarios verificados desde la raíz del repositorio con 
 - Gitleaks revisa los archivos versionables de infraestructura, del panel y del código y despliegue de Asistencia. Excluye los archivos ignorados y elimina el informe temporal después de resumirlo.
 - Conftest verifica que haya tres EC2 y comprueba IMDSv2 y cifrado en el plan de OpenTofu o Terraform, la plantilla de CloudFormation o las altas de la vista previa de Pulumi.
 
-Abre **Tenants → Ver historial** para consultar fecha en Bolivia, herramienta, versión, alcance, conteo y códigos de reglas por intento. Los hallazgos son informativos. Un error al ejecutar cualquiera de las herramientas detiene el intento antes de aplicar y el historial conserva los resultados obtenidos. [Formatos de IaC de Trivy](https://trivy.dev/docs/latest/coverage/iac/).
+Abre **Tenants → Ver actividad** para consultar fecha en Bolivia, herramienta, versión, alcance, conteo y códigos de reglas por intento. Los hallazgos son informativos. Un error al ejecutar cualquiera de las herramientas detiene el intento antes de aplicar y el historial conserva los resultados obtenidos. [Formatos de IaC de Trivy](https://trivy.dev/docs/latest/coverage/iac/).
 
 ## API local
 
@@ -91,6 +91,7 @@ Para automatizar operaciones, inicia sesión con `POST /api/sesion` enviando `us
 | `POST /api/tenants/<tenant>/preparar-retiro` | Generar el plan y el inventario de retiro. |
 | `POST /api/tenants/<tenant>/cancelar-retiro/<revision>` | Cancelar la revisión vigente. |
 | `POST /api/tenants/<tenant>/retirar/<revision>` | Confirmar y encolar el retiro de la revisión vigente. |
+| `GET /api/tenants/<tenant>/actividad?operacion=<id>` | Consultar los eventos de una operación, auditoría y estado del monitor. El identificador de operación es opcional. |
 | `GET /api/tenants/<tenant>/despliegues` | Consultar el historial, la fase y el resultado de cada operación. |
 | `GET /metrics` | Exponer la última muestra en formato Prometheus con el monitor habilitado. |
 | `GET /api/alertas` | Consultar alertas activas de Prometheus con el monitor habilitado. |

@@ -124,6 +124,24 @@ export function crearServidor(registro, despliegueHabilitado = false, monitor = 
         }
         return responder(res, 201, tenant);
       }
+      const rutaActividad = pathname.match(/^\/api\/tenants\/([a-z0-9-]{3,40})\/actividad$/);
+      if (req.method === 'GET' && rutaActividad) {
+        const tenant = registro.obtener(rutaActividad[1]);
+        if (!tenant) return responder(res, 404, { mensaje: 'Tenant no encontrado.' });
+        const valor = searchParams.get('operacion');
+        const operacion = valor === null ? undefined : Number(valor);
+        if (valor !== null && (!/^[1-9][0-9]*$/.test(valor) || !Number.isSafeInteger(operacion))) {
+          return responder(res, 400, { mensaje: 'Operación no válida.' });
+        }
+        const actividad = registro.actividad(tenant.identificador, operacion);
+        if (operacion && !actividad.operaciones.some(({ id }) => id === operacion)) {
+          return responder(res, 404, { mensaje: 'Operación no encontrada para este tenant.' });
+        }
+        return responder(res, 200, {
+          ...actividad,
+          monitoreo: monitor?.actividad?.(tenant.identificador) ?? null,
+        });
+      }
       const rutaAuditoria = pathname.match(/^\/api\/tenants\/([a-z0-9-]{3,40})\/auditoria$/);
       if (req.method === 'GET' && rutaAuditoria) {
         return responder(res, 200, registro.auditoria(rutaAuditoria[1]));

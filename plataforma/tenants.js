@@ -61,6 +61,15 @@ export function abrirRegistro(ruta) {
     CREATE INDEX IF NOT EXISTS despliegues_por_tenant ON despliegues (tenant_id, id DESC);
     CREATE UNIQUE INDEX IF NOT EXISTS despliegue_activo_por_tenant ON despliegues (tenant_id)
       WHERE estado IN ('en-cola', 'en-curso');
+    CREATE TABLE IF NOT EXISTS eventos_operacion (
+      id INTEGER PRIMARY KEY,
+      trabajo_id INTEGER NOT NULL REFERENCES despliegues(id),
+      herramienta TEXT NOT NULL,
+      nivel TEXT NOT NULL,
+      mensaje TEXT NOT NULL,
+      fecha TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS eventos_por_operacion ON eventos_operacion (trabajo_id, id);
     CREATE TABLE IF NOT EXISTS alertas (
       clave TEXT PRIMARY KEY NOT NULL,
       alerta TEXT NOT NULL,
@@ -168,7 +177,20 @@ export function abrirRegistro(ruta) {
   const vencer = db.prepare(`
     UPDATE despliegues SET estado = 'error', fase = 'El proceso se interrumpió. Puedes reintentar.', actualizado = ?
     WHERE estado = 'en-curso' AND actualizado < ?
-    RETURNING tenant_id
+    RETURNING id, tenant_id
+  `);
+  const insertarEvento = db.prepare(`
+    INSERT INTO eventos_operacion (trabajo_id, herramienta, nivel, mensaje, fecha)
+    VALUES (?, ?, ?, ?, ?)
+  `);
+  const consultarOperaciones = db.prepare(`
+    SELECT id, tipo, estado, fase, actualizado, escaneos FROM despliegues
+    WHERE tenant_id = ? ORDER BY id DESC
+  `);
+  const consultarEventos = db.prepare(`
+    SELECT e.id, e.herramienta, e.nivel, e.mensaje, e.fecha
+    FROM eventos_operacion e JOIN despliegues d ON d.id = e.trabajo_id
+    WHERE d.tenant_id = ? AND d.id = ? ORDER BY e.id
   `);
   const fecha = () => new Date().toISOString();
   const registrarAuditoria = db.prepare(
@@ -261,6 +283,7 @@ export function abrirRegistro(ruta) {
         const trabajo = encolar.get(identificador, tipo, tenant.estado, fecha());
         if (trabajo) {
           actualizarTenant.run('en-cola', identificador);
+          insertarEvento.run(trabajo.id, 'panel', 'info', trabajo.fase, trabajo.actualizado);
           if (operador) registrarAuditoria.run(identificador, operador, tipo, trabajo.id, trabajo.actualizado);
         }
         return trabajo;
@@ -270,9 +293,11 @@ export function abrirRegistro(ruta) {
       return transaccion(() => {
         const vista = vistaPrevia.get(identificador);
         if (porId.get(identificador)?.estado !== 'retiro-pendiente' || vista?.id !== revision) return false;
-        cerrarVista.run('cancelado', 'Se canceló el retiro.', fecha(), revision);
+        const ahora = fecha();
+        cerrarVista.run('cancelado', 'Se canceló el retiro.', ahora, revision);
+        insertarEvento.run(revision, 'panel', 'info', 'Se canceló el retiro.', ahora);
         actualizarTenant.run(vista.estado_anterior, identificador);
-        if (operador) registrarAuditoria.run(identificador, operador, 'cancelar-retiro', revision, fecha());
+        if (operador) registrarAuditoria.run(identificador, operador, 'cancelar-retiro', revision, ahora);
         return true;
       });
     },
@@ -280,9 +305,15 @@ export function abrirRegistro(ruta) {
       return transaccion(() => {
         const ahora = fecha();
         const expiracion = new Date(Date.now() - 120_000).toISOString();
-        for (const trabajo of vencer.all(ahora, expiracion)) actualizarTenant.run('error', trabajo.tenant_id);
+        for (const trabajo of vencer.all(ahora, expiracion)) {
+          actualizarTenant.run('error', trabajo.tenant_id);
+          insertarEvento.run(trabajo.id, 'panel', 'error', 'El proceso se interrumpió. Puedes reintentar.', ahora);
+        }
         const trabajo = reclamar.get(ahora);
-        if (trabajo) actualizarTenant.run('en-curso', trabajo.tenant_id);
+        if (trabajo) {
+          actualizarTenant.run('en-curso', trabajo.tenant_id);
+          insertarEvento.run(trabajo.id, 'panel', 'info', 'Preparando la operación en AWS.', ahora);
+        }
         return trabajo;
       });
     },
@@ -291,6 +322,17 @@ export function abrirRegistro(ruta) {
         ...trabajo, salida: trabajo.salida ? JSON.parse(trabajo.salida) : null,
         escaneos: trabajo.escaneos ? JSON.parse(trabajo.escaneos) : [],
       }));
+    },
+    actividad(identificador, operacion) {
+      const operaciones = consultarOperaciones.all(identificador);
+      const seleccion = operacion ?? operaciones[0]?.id;
+      return {
+        operaciones: operaciones.map(({ escaneos, ...trabajo }) => trabajo),
+        operacion: seleccion ?? null,
+        eventos: seleccion ? consultarEventos.all(identificador, seleccion) : [],
+        escaneos: JSON.parse(operaciones.find(({ id }) => id === seleccion)?.escaneos ?? '[]'),
+        auditoria: consultarAuditoria.all(identificador),
+      };
     },
     auditoria: (identificador) => consultarAuditoria.all(identificador),
     obtenerInfraestructura(identificador) {
@@ -304,16 +346,21 @@ export function abrirRegistro(ruta) {
         revision: vista && { id: vista.id, ...JSON.parse(vista.salida) },
       };
     },
-    actualizar(id, estado, fase, salida = null) {
+    actualizar(id, estado, fase, salida = null, herramienta = 'panel', nivel = 'info') {
       return transaccion(() => {
         const ahora = fecha();
         const trabajo = actualizar.get(estado, fase, ahora, salida && JSON.stringify(salida), id);
         if (!trabajo) return;
         if (trabajo.tipo === 'retirar' && estado !== 'en-curso') {
           const vista = vistaPrevia.get(trabajo.tenant_id);
-          if (vista) cerrarVista.run('confirmado', 'Se confirmó este plan de retiro.', ahora, vista.id);
+          if (vista) {
+            const mensaje = 'Se confirmó este plan de retiro.';
+            cerrarVista.run('confirmado', mensaje, ahora, vista.id);
+            insertarEvento.run(vista.id, 'panel', 'info', mensaje, ahora);
+          }
         }
         actualizarTenant.run(estado, trabajo.tenant_id);
+        insertarEvento.run(id, herramienta, estado === 'error' ? 'error' : nivel, fase, ahora);
       });
     },
     tocar: (id) => tocar.run(fecha(), id),

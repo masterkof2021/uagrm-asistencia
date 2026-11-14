@@ -50,18 +50,22 @@ function formatearMuestra(tenant, rol, valores) {
 
 async function medirTenant(aws, registro, tenant) {
   const infraestructura = registro.obtenerInfraestructura(tenant.identificador);
-  if (!infraestructura?.instancias) return [];
+  if (!infraestructura?.instancias) return { series: [], respondieron: 0 };
   const roles = ['backend', 'database', 'frontend'];
   let instancias;
   try {
     instancias = await describirInstancias(aws, tenant.identificador, infraestructura.instancias);
   } catch {
-    return roles.flatMap((rol) => formatearMuestra(tenant, rol, { muestra_up: 0 }));
+    return { series: roles.flatMap((rol) => formatearMuestra(tenant, rol, { muestra_up: 0 })), respondieron: 0 };
   }
   const resultados = await Promise.allSettled(instancias.map((instancia) =>
     instancia.estado === 'running' ? medirInstancia(aws, instancia) : { muestra_up: 1, servicio_up: 0 }));
-  return resultados.flatMap((resultado, i) => formatearMuestra(tenant, instancias[i].rol,
-    resultado.status === 'fulfilled' ? resultado.value : { muestra_up: 0 }));
+  const mediciones = resultados.map((resultado) =>
+    resultado.status === 'fulfilled' ? resultado.value : { muestra_up: 0 });
+  return {
+    series: mediciones.flatMap((valores, i) => formatearMuestra(tenant, instancias[i].rol, valores)),
+    respondieron: mediciones.filter(({ muestra_up }) => muestra_up === 1).length,
+  };
 }
 
 export function iniciarMonitor(registro, config) {
@@ -70,6 +74,9 @@ export function iniciarMonitor(registro, config) {
   let ultima = 0;
   let disponible = 0;
   let enCurso;
+  let mediciones = new Map();
+  let midiendo;
+  let fallo = false;
   async function medir() {
     if (enCurso) return;
     enCurso = (async () => {
@@ -77,12 +84,24 @@ export function iniciarMonitor(registro, config) {
         const activos = registro.listar({ estado: 'listo' });
         const { aws } = activos.length ? await conectarAws(config) : {};
         const muestras = [];
-        for (const tenant of activos) muestras.push(...await medirTenant(aws, registro, tenant));
+        const ciclo = new Map();
+        for (const tenant of activos) {
+          midiendo = tenant.identificador;
+          const { series, respondieron } = await medirTenant(aws, registro, tenant);
+          ciclo.set(midiendo, { respondieron, fecha: new Date().toISOString() });
+          muestras.push(...series);
+        }
+        mediciones = ciclo;
         lectura = muestras;
         disponible = 1;
+        fallo = false;
       } catch {
         disponible = 0;
+        fallo = true;
         lectura = [];
+        mediciones = new Map();
+      } finally {
+        midiendo = undefined;
       }
       ultima = Date.now() / 1000;
     })();
@@ -93,6 +112,17 @@ export function iniciarMonitor(registro, config) {
   medir();
   return {
     alertas,
+    actividad(identificador) {
+      const { fuente, ultimaConsulta } = alertas.resumen();
+      const tenant = registro.obtener(identificador);
+      return {
+        habilitado: tenant?.estado === 'listo',
+        midiendo: midiendo === identificador,
+        fallo,
+        ultimaMuestra: mediciones.get(identificador) ?? null,
+        fuente, ultimaConsulta,
+      };
+    },
     leer: () => [
       '# TYPE pfm2_colector_ok gauge', `pfm2_colector_ok ${disponible}`,
       '# TYPE pfm2_colector_timestamp_seconds gauge', `pfm2_colector_timestamp_seconds ${ultima}`,

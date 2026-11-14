@@ -165,14 +165,15 @@
         <select id="operacion-actividad"></select>
       </label>
       <p id="estado-actividad" role="status"></p>
+      <section id="escaneos-actividad" class="actividad-escaneos" aria-label="Escáneres" hidden>
+        <span class="actividad-herramienta herramienta-scanners">Escáneres</span>
+        <p id="estado-escaneos"></p>
+        <ul id="resultados-actividad"></ul>
+      </section>
       <section id="monitoreo-actividad" aria-label="Monitoreo" class="actividad-monitor" hidden></section>
       <section aria-label="Registro de ejecución">
         <ol id="eventos-actividad" class="actividad-eventos"></ol>
       </section>
-      <details id="escaneos-actividad" hidden>
-        <summary>Resultados de escaneo</summary>
-        <ul id="resultados-actividad"></ul>
-      </details>
       <details>
         <summary>Actividad del operador</summary>
         <ul id="auditoria-actividad"></ul>

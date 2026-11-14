@@ -22,13 +22,13 @@ provider "aws" {
       Project     = "proyecto-final-modulo-2"
       Tenant      = var.tenant_id
       Environment = var.environment
-      ManagedBy   = var.managed_by
+      ManagedBy   = "OpenTofu"
     }
   }
 }
 
 locals {
-  name = var.managed_by == "Terraform" ? "pfm2-tf-${var.tenant_id}" : "pfm2-${var.tenant_id}"
+  name = "pfm2-${var.tenant_id}"
   catalog = {
     for plan in jsondecode(file("${path.module}/../../plataforma/planes.json")) : plan.id => plan
   }
@@ -60,7 +60,7 @@ locals {
     for role, secrets in merge(local.secrets, { frontend = [] }) :
     role => tolist(secrets) if local.use_ssm || role != "frontend"
   }
-  parameter_prefix = "/asistencia/proyecto-final-modulo-2/${var.tenant_id}${var.managed_by == "Terraform" ? "/terraform" : ""}"
+  parameter_prefix = "/asistencia/proyecto-final-modulo-2/${var.tenant_id}"
 }
 
 resource "aws_vpc" "tenant" {

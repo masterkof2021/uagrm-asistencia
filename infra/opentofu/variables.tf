@@ -23,15 +23,6 @@ variable "environment" {
   }
 }
 
-variable "managed_by" {
-  type    = string
-  default = "OpenTofu"
-  validation {
-    condition     = contains(["OpenTofu", "Terraform"], var.managed_by)
-    error_message = "El motor HCL debe ser OpenTofu o Terraform."
-  }
-}
-
 variable "plan" {
   type = string
   validation {

@@ -15,7 +15,7 @@ let consultaAlertas;
 let actividad;
 const herramientas = {
   panel: 'Panel', packer: 'Packer · AMI', opentofu: 'OpenTofu', pulumi: 'Pulumi',
-  terraform: 'Terraform', cloudformation: 'CloudFormation', scanners: 'Escáneres',
+  scanners: 'Escáneres',
   'cloud-init': 'cloud-init', ansible: 'Ansible', monitoreo: 'Grafana · Prometheus',
   ssm: 'Systems Manager', ec2: 'Amazon EC2',
 };
@@ -115,7 +115,9 @@ function filaTenant(tenant) {
     (tenant.tipo_despliegue === 'retirar' ? 'preparar-retiro' : tenant.tipo_despliegue ?? 'desplegar') :
     { registrado: 'desplegar', listo: 'suspender', suspendido: 'reanudar' }[tenant.estado];
   const operacion = operaciones[tipo];
-  if (catalogo.motoresEjecutables.includes(tenant.motor) && operacion) {
+  const motorDisponible = catalogo.motoresEjecutables.includes(tenant.motor);
+  if (!motorDisponible) accion.append(nodo('small', 'Motor retirado del panel.'));
+  if (motorDisponible && operacion) {
     if (catalogo.despliegueHabilitado) {
       const boton = nodo('button', tenant.estado === 'error' ? `Reintentar: ${operacion.etiqueta}` : operacion.etiqueta, 'secundario');
       boton.type = 'button';
@@ -125,13 +127,13 @@ function filaTenant(tenant) {
       accion.append(nodo('small', 'AWS pendiente de configurar.'));
     }
   }
-  if (catalogo.despliegueHabilitado && ['listo', 'suspendido'].includes(tenant.estado)) {
+  if (motorDisponible && catalogo.despliegueHabilitado && ['listo', 'suspendido'].includes(tenant.estado)) {
     const boton = nodo('button', 'Preparar retiro', 'secundario');
     boton.type = 'button';
     boton.addEventListener('click', () => iniciarOperacion(tenant, operaciones['preparar-retiro'], boton));
     accion.append(boton);
   }
-  if (catalogo.despliegueHabilitado && tenant.estado === 'retiro-pendiente') {
+  if (motorDisponible && catalogo.despliegueHabilitado && tenant.estado === 'retiro-pendiente') {
     const boton = nodo('button', 'Revisar retiro', 'secundario');
     boton.type = 'button';
     boton.addEventListener('click', () => mostrarRetiro(tenant, boton));
@@ -258,6 +260,31 @@ function mostrarMonitoreo(monitor) {
   seccion.replaceChildren(encabezado, nodo('p', muestra), nodo('p', prometheus));
 }
 
+function mostrarEscaneos(trabajo, eventos, escaneos) {
+  const seccion = porId('escaneos-actividad');
+  seccion.hidden = trabajo?.tipo !== 'desplegar';
+  if (seccion.hidden) return;
+
+  const ultimo = eventos.findLast(({ herramienta }) => herramienta === 'scanners');
+  const activo = ['en-cola', 'en-curso'].includes(trabajo.estado);
+  const estado = ultimo?.mensaje ?? (escaneos.length ? 'Resultados guardados para este intento.' :
+    activo ? 'A la espera del plan o la plantilla.' : 'Este intento no tiene escaneos registrados.');
+  porId('estado-escaneos').textContent = estado;
+  const nombres = { trivy: 'Trivy', gitleaks: 'Gitleaks', conftest: 'Conftest' };
+  porId('resultados-actividad').replaceChildren(...escaneos.map((control) => {
+    const resultado = control.estado === 'error' ? 'Error de ejecución' :
+      control.hallazgos === 0 ? 'Sin hallazgos' : `${control.hallazgos} hallazgos`;
+    const nivel = control.estado === 'error' ? 'error' : control.hallazgos ? 'aviso' : 'exito';
+    const item = nodo('li');
+    item.append(nodo('strong', [nombres[control.nombre] ?? control.nombre, control.version].filter(Boolean).join(' ')),
+      nodo('span', resultado, `actividad-nivel nivel-${nivel}`),
+      nodo('small', [control.alcance, formatearFechaAlerta(control.fecha)].filter(Boolean).join(' · ')));
+    if (control.motivo) item.append(nodo('small', control.motivo));
+    if (control.reglas?.length) item.append(nodo('small', control.reglas.join(', ')));
+    return item;
+  }));
+}
+
 function renderizarActividad(datos) {
   const { operaciones, operacion, eventos, escaneos, auditoria, monitoreo } = datos;
   const cambioOperacion = actividad.mostrada !== operacion;
@@ -277,16 +304,7 @@ function renderizarActividad(datos) {
   }];
   porId('eventos-actividad').replaceChildren(...lineas.toReversed().map(filaActividad));
   if (cambioOperacion) porId('actividad-tenant').querySelector('.actividad-contenido').scrollTop = 0;
-  porId('escaneos-actividad').hidden = !escaneos.length;
-  const nombres = { trivy: 'Trivy', gitleaks: 'Gitleaks', conftest: 'Conftest' };
-  porId('resultados-actividad').replaceChildren(...escaneos.map((control) => {
-    const resultado = control.estado === 'error' ? 'Error de ejecución' :
-      control.hallazgos === 0 ? 'Sin hallazgos' : `${control.hallazgos} hallazgos`;
-    const item = nodo('li', `${nombres[control.nombre]} ${control.version ?? ''} · ${resultado}`);
-    item.append(nodo('small', `${control.alcance ?? ''} · ${formatearFechaAlerta(control.fecha)}`));
-    if (control.reglas?.length) item.append(nodo('small', control.reglas.join(', ')));
-    return item;
-  }));
+  mostrarEscaneos(trabajo, eventos, escaneos);
   porId('auditoria-actividad').replaceChildren(...(auditoria.length ? auditoria.map((evento) => {
     const trabajoId = evento.trabajo_id ? ` · Operación #${evento.trabajo_id}` : '';
     return nodo('li', `${nombresOperaciones[evento.accion] ?? evento.accion} · ${evento.operador} · ${formatearFechaAlerta(evento.fecha)}${trabajoId}`);

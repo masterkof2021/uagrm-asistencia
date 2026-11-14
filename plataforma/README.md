@@ -44,9 +44,9 @@ npm.cmd --prefix plataforma start
 
 En **Tenants**, elige **Desplegar en AWS** en un registro de OpenTofu. El botón crea recursos facturables. **Ver actividad** abre un panel lateral con los eventos de ejecución, agrupados por operación y diferenciados por herramienta. El panel consulta novedades cada dos segundos mientras está abierto. El tenant pasa a **Operativo** cuando se comprueban sus tres servicios. Si falla, **Reintentar en AWS** usa la misma clave de estado en S3 y la AMI fijada para el tenant. El selector permite consultar intentos anteriores. Para las operaciones registradas antes de esta mejora, se conserva la última fase disponible, junto con los escaneos y la auditoría.
 
-Para un tenant de CloudFormation, usa el mismo flujo. El estado queda en la pila del tenant y el panel guarda su ARN, los recursos de las tres capas y la huella de la plantilla. [Operación con CloudFormation](../infra/cloudformation/README.md).
+Pulumi usa un programa JavaScript y una pila con estado en S3. Instala su CLI y las dependencias Node para usar ese motor. [Operación con Pulumi](../infra/pulumi/README.md).
 
-Terraform usa el módulo HCL compartido y un estado propio en S3. Pulumi usa un programa JavaScript y una pila con estado en S3. Instala la CLI del motor que vas a seleccionar y, para Pulumi, sus dependencias Node. [Operación con Terraform](../infra/terraform/README.md) · [Operación con Pulumi](../infra/pulumi/README.md).
+Los registros creados con motores retirados conservan su historial y auditoría. Gestiona cualquier infraestructura anterior con el estado y la versión del proyecto que la creó.
 
 El estado se almacena en `tenants/panel/<tenant>/terraform.tfstate`. La copia local de cada intento de despliegue y sus planes quedan fuera de Git, en `data/despliegues/<tenant>/<id>/infra/opentofu`. Conserva esa carpeta para que el panel pueda operar el despliegue.
 
@@ -64,13 +64,13 @@ En **Tenants → Acceso por Systems Manager**, copia el comando de la instituci�
 
 ## Escaneos antes de desplegar
 
-En Windows, instala los binarios verificados desde la raíz del repositorio con `powershell -File asistencia/infra/cloudformation/scripts/Install-Scanners.ps1`. En Linux, agrega `trivy`, `gitleaks` y `conftest` al PATH. Inicia el panel con `PFM2_ESCANEOS=1` para ejecutar los tres controles antes de aplicar un despliegue nuevo o un reintento.
+En Windows, instala los binarios verificados desde la raíz del repositorio con `powershell -File plataforma/Install-Scanners.ps1`. En Linux, agrega `trivy`, `gitleaks` y `conftest` al PATH. El panel ejecuta los tres controles por defecto antes de aplicar un despliegue nuevo o un reintento. Si arrancas con `PFM2_ESCANEOS=0`, el panel registra que los omitió. Suspender, reanudar y retirar un tenant no ejecuta estos controles.
 
-- Trivy revisa el plan JSON de OpenTofu o Terraform, la plantilla generada de CloudFormation o las dependencias fijadas de Pulumi.
+- Trivy revisa el plan JSON de OpenTofu o las dependencias fijadas de Pulumi.
 - Gitleaks revisa los archivos versionables de infraestructura, del panel y del código y despliegue de Asistencia. Excluye los archivos ignorados y elimina el informe temporal después de resumirlo.
-- Conftest verifica que haya tres EC2 y comprueba IMDSv2 y cifrado en el plan de OpenTofu o Terraform, la plantilla de CloudFormation o las altas de la vista previa de Pulumi.
+- Conftest verifica que haya tres EC2 y comprueba IMDSv2 y cifrado en el plan de OpenTofu o las altas de la vista previa de Pulumi.
 
-Abre **Tenants → Ver actividad** para consultar fecha en Bolivia, herramienta, versión, alcance, conteo y códigos de reglas por intento. Los hallazgos son informativos. Un error al ejecutar cualquiera de las herramientas detiene el intento antes de aplicar y el historial conserva los resultados obtenidos. [Formatos de IaC de Trivy](https://trivy.dev/docs/latest/coverage/iac/).
+Abre **Tenants → Ver actividad** y elige un intento de despliegue para ver el avance y los resultados a medida que termina cada herramienta. El resumen muestra fecha en Bolivia, herramienta, versión, alcance, conteo y códigos de reglas por intento. Los hallazgos son informativos. Un error al ejecutar cualquiera de las herramientas detiene el intento antes de aplicar y el historial conserva los resultados obtenidos. [Formatos de IaC de Trivy](https://trivy.dev/docs/latest/coverage/iac/).
 
 ## API local
 

@@ -17,8 +17,8 @@ Resources:
     Type: AWS::IAM::ManagedPolicy
     Metadata:
       com.aws.cloudformation.Context:
-        why: Limita los permisos que pueden asumir las EC2 de ambos motores.
-        must: Restringir los secretos a rutas del proyecto.
+        why: Limita los permisos de las EC2 creadas por OpenTofu y Pulumi.
+        must: Restringir los parámetros de arranque a rutas del proyecto.
     Properties:
       ManagedPolicyName: pfm2-instance-boundary
       Path: /proyecto-final-modulo-2/
@@ -28,9 +28,6 @@ Resources:
           - Effect: Allow
             Action: ssm:GetParameter
             Resource: !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/asistencia/proyecto-final-modulo-2/*
-          - Effect: Allow
-            Action: secretsmanager:GetSecretValue
-            Resource: !Sub arn:${AWS::Partition}:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:/asistencia/proyecto-final-modulo-2/*/cloudformation/*
           - Effect: Allow
             Action: kms:Decrypt
             Resource: !Ref SsmKeyArn
@@ -50,7 +47,7 @@ Resources:
     Metadata:
       com.aws.cloudformation.Context:
         why: Autoriza el ciclo de vida y las verificaciones del panel.
-        must: Mantener CloudFormation limitado a pilas de tenants con prefijo pfm2-cfn.
+        must: Mantener el ciclo de vida limitado a los recursos de tenants del proyecto.
     Properties:
       RoleName: pfm2-panel-deploy
       Path: /proyecto-final-modulo-2/panel/
@@ -170,7 +167,7 @@ Resources:
                 Condition:
                   StringEquals:
                     aws:ResourceTag/Project: proyecto-final-modulo-2
-                    aws:ResourceTag/ManagedBy: [OpenTofu, CloudFormation, Terraform, Pulumi]
+                    aws:ResourceTag/ManagedBy: [OpenTofu, Pulumi]
               - Effect: Allow
                 Action: iam:CreateRole
                 Resource: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/proyecto-final-modulo-2/pfm2-*
@@ -189,52 +186,6 @@ Resources:
               - Effect: Allow
                 Action: [iam:CreateInstanceProfile, iam:GetInstanceProfile, iam:DeleteInstanceProfile, iam:TagInstanceProfile, iam:AddRoleToInstanceProfile, iam:RemoveRoleFromInstanceProfile]
                 Resource: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:instance-profile/proyecto-final-modulo-2/pfm2-*
-        - PolicyName: CloudFormationDelTenant
-          PolicyDocument:
-            Version: '2012-10-17'
-            Statement:
-              - Effect: Allow
-                Action:
-                  - cloudformation:CreateChangeSet
-                  - cloudformation:DescribeChangeSet
-                  - cloudformation:DeleteChangeSet
-                  - cloudformation:ExecuteChangeSet
-                  - cloudformation:DescribeStacks
-                  - cloudformation:DescribeStackEvents
-                  - cloudformation:ListStackResources
-                  - cloudformation:DeleteStack
-                Resource: !Sub arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/pfm2-cfn-*/*
-              - Effect: Allow
-                Action: [cloudformation:ValidateTemplate, secretsmanager:GetRandomPassword]
-                Resource: '*'
-                Condition:
-                  StringEquals:
-                    aws:RequestedRegion: !Ref AWS::Region
-              - Effect: Allow
-                Action:
-                  - secretsmanager:CreateSecret
-                  - secretsmanager:DescribeSecret
-                  - secretsmanager:TagResource
-                  - secretsmanager:DeleteSecret
-                Resource: !Sub arn:${AWS::Partition}:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:/asistencia/proyecto-final-modulo-2/*/cloudformation/*
-              - Effect: Allow
-                Action: iam:CreateRole
-                Resource: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/pfm2-cfn-*
-                Condition:
-                  StringEquals:
-                    iam:PermissionsBoundary: !Ref InstanceBoundary
-              - Effect: Allow
-                Action: [iam:GetRole, iam:TagRole, iam:DeleteRole, iam:ListRolePolicies, iam:ListAttachedRolePolicies, iam:ListInstanceProfilesForRole, iam:GetRolePolicy, iam:PutRolePolicy, iam:DeleteRolePolicy]
-                Resource: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/pfm2-cfn-*
-              - Effect: Allow
-                Action: iam:PassRole
-                Resource: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/pfm2-cfn-*
-                Condition:
-                  StringEquals:
-                    iam:PassedToService: ec2.amazonaws.com
-              - Effect: Allow
-                Action: [iam:CreateInstanceProfile, iam:GetInstanceProfile, iam:DeleteInstanceProfile, iam:TagInstanceProfile, iam:AddRoleToInstanceProfile, iam:RemoveRoleFromInstanceProfile]
-                Resource: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:instance-profile/pfm2-cfn-*
         - PolicyName: VerificacionDelTenant
           PolicyDocument:
             Version: '2012-10-17'

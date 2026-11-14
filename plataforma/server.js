@@ -153,7 +153,7 @@ export function crearServidor(registro, despliegueHabilitado = false, monitor = 
         if (req.method === 'GET') return responder(res, 200, registro.consultar(tenant.identificador));
         if (!despliegueHabilitado) return responder(res, 503, { mensaje: 'Configura el rol y el estado de AWS en el panel.' });
         if (!catalogo.motoresEjecutables.includes(tenant.motor)) {
-          return responder(res, 409, { mensaje: 'El motor del tenant no está disponible para desplegar.' });
+          return responder(res, 409, { mensaje: 'El motor de este tenant fue retirado del panel.' });
         }
         const [accion, revision] = rutaDespliegues[2].split('/');
         if (accion === 'cancelar-retiro') {

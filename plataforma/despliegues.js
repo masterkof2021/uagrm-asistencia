@@ -4,11 +4,10 @@ import { copyFile, cp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as esperar } from 'node:timers/promises';
-import { generarPlantilla, prefijoSecretos } from '../infra/cloudformation/plantilla.js';
 import { origenLocal } from '../infra/arranque.js';
-import { aprovisionarPila, borrarPila, consultarPila, recursosPila, verificarPila } from './cloudformation.js';
 import { abrirPilaPulumi, huellaPulumi, inventarioPulumi, prepararProgramaPulumi, revisarPreviewPulumi, verificarEntradaPulumi } from './pulumi.js';
 import { escanearDespliegue } from './escaneos.js';
+import { catalogo } from './catalogo.js';
 
 const modulo = fileURLToPath(new URL('../infra/opentofu/', import.meta.url));
 const region = 'us-east-2';
@@ -16,10 +15,7 @@ const ejecutable = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const esperado = ['backend', 'database', 'frontend'];
 const idAmi = /^ami-(?:[0-9a-f]{8}|[0-9a-f]{17})$/;
 const salidaMaxima = 8 * 1024 * 1024;
-const lockTerraform = fileURLToPath(new URL('../infra/terraform/.terraform.lock.hcl', import.meta.url));
-const motorHcl = (motor) => motor === 'terraform' ? 'terraform' : 'tofu';
-const carpetaHcl = (motor) => motor === 'terraform' ? 'terraform' : 'opentofu';
-const claveHcl = (tenant) => `tenants/panel/${tenant.motor === 'terraform' ? 'terraform/' : ''}${tenant.identificador}/terraform.tfstate`;
+const claveOpenTofu = (tenant) => `tenants/panel/${tenant.identificador}/terraform.tfstate`;
 
 export function configurarDespliegue(env = process.env) {
   const cuenta = env.PFM2_AWS_ACCOUNT;
@@ -33,7 +29,7 @@ export function configurarDespliegue(env = process.env) {
     throw new Error('PFM2_AMI_ID debe contener el identificador de una AMI de AWS.');
   }
   return {
-    cuenta, bucket, amiPersonalizada, ansible: env.PFM2_ANSIBLE === '1', escaneos: env.PFM2_ESCANEOS === '1',
+    cuenta, bucket, amiPersonalizada, ansible: env.PFM2_ANSIBLE === '1', escaneos: env.PFM2_ESCANEOS !== '0',
     perfil: env.PFM2_DEPLOY_PROFILE ?? 'pfm2-deploy',
     rol: 'pfm2-panel-deploy',
     limite: `arn:aws:iam::${cuenta}:policy/proyecto-final-modulo-2/pfm2-instance-boundary`,
@@ -71,25 +67,19 @@ function ejecutar(programa, args, opciones) {
       if (/VpcLimitExceeded/i.test(detalle)) {
         return reject(new Error('AWS alcanzó la cuota de VPC en Ohio. Reintenta cuando haya una VPC disponible.'));
       }
-      const error = new Error(`Falló ${programa} ${args[0]}. Revisa la configuración y el estado en AWS.`);
-      if (programa === 'aws') {
-        error.awsCode = stderr.match(/An error occurred \(([A-Za-z0-9]+)\)/)?.[1];
-        error.pilaAusente = args[0] === 'cloudformation' && args[1] === 'describe-stacks' &&
-          error.awsCode === 'ValidationError' && /Stack with id .+ does not exist/i.test(stderr);
-      }
-      reject(error);
+      reject(new Error(`Falló ${programa} ${args[0]}. Revisa la configuración y el estado en AWS.`));
     });
   });
 }
 
 async function prepararTrabajo(directorio, tenant) {
-  const raiz = join(directorio, 'infra', carpetaHcl(tenant.motor));
+  const raiz = join(directorio, 'infra', 'opentofu');
   await mkdir(raiz, { recursive: true });
   await mkdir(join(directorio, 'plataforma'), { recursive: true });
   await Promise.all([
     ...['main.tf', 'variables.tf'].map((archivo) =>
       copyFile(join(modulo, archivo), join(raiz, archivo))),
-    copyFile(tenant.motor === 'terraform' ? lockTerraform : join(modulo, '.terraform.lock.hcl'), join(raiz, '.terraform.lock.hcl')),
+    copyFile(join(modulo, '.terraform.lock.hcl'), join(raiz, '.terraform.lock.hcl')),
     copyFile(join(modulo, 'backend.tf.example'), join(raiz, 'backend.tf')),
     cp(join(modulo, 'cloud-init'), join(raiz, 'cloud-init'), { recursive: true }),
     writeFile(join(directorio, 'plataforma', 'planes.json'), JSON.stringify([tenant.plan])),
@@ -108,14 +98,15 @@ function revisarPlan(plan, tenant) {
   }
 }
 
-async function revisarSeguridad(config, motor, directorio, archivo, instancias, progreso, guardarEscaneos) {
-  if (!config.escaneos) return;
+async function revisarSeguridad(motor, directorio, archivo, instancias, progreso, guardarEscaneos) {
+  progreso('Iniciando los controles previos al despliegue.', 'scanners');
   const resultados = await escanearDespliegue({ motor, directorio, archivo, instancias,
     informar: (mensaje, nivel) => progreso(mensaje, 'scanners', nivel),
+    guardarResultados: guardarEscaneos,
   });
-  guardarEscaneos(resultados);
   const fallos = resultados.filter(({ estado }) => estado === 'error').map(({ nombre }) => nombre);
   if (fallos.length) throw new Error(`Escaneo incompleto (${fallos.join(', ')}). Revisa las herramientas y reintenta.`);
+  progreso('Trivy, Gitleaks y Conftest completaron los controles previos.', 'scanners', 'exito');
 }
 
 export async function seleccionarAmi(aws, directorio, { amiPersonalizada, cuenta }) {
@@ -255,28 +246,26 @@ export async function conectarAws(config, ejecutarComando = ejecutar, cwd) {
   return { aws, env };
 }
 
-export async function desplegarHcl({ config, directorio, datosTenant, tenant, progreso, guardarEscaneos, ejecutarComando = ejecutar }) {
+export async function desplegarOpenTofu({ config, directorio, datosTenant, tenant, progreso, guardarEscaneos, ejecutarComando = ejecutar }) {
   if (!ejecutable.test(tenant.identificador)) throw new Error('El identificador del tenant no es válido.');
   const cwd = await prepararTrabajo(directorio, tenant);
   const { aws, env } = await conectarAws(config, ejecutarComando, cwd);
-  const motor = motorHcl(tenant.motor);
-  const ejecutarHcl = (...args) => ejecutarComando(motor, args, { cwd, env });
-  const nombre = motor === 'terraform' ? 'Terraform' : 'OpenTofu';
+  const ejecutarTofu = (...args) => ejecutarComando('tofu', args, { cwd, env });
   const { ami, ansible } = await prepararArranque(aws, datosTenant, config, progreso);
   const variables = {
     account_id: config.cuenta, tenant_id: tenant.identificador, environment: tenant.entorno,
-    plan: tenant.plan.id, ami_id: ami, permissions_boundary_arn: config.limite, managed_by: nombre,
+    plan: tenant.plan.id, ami_id: ami, permissions_boundary_arn: config.limite,
     use_ansible: ansible, web_origin: origenLocal(tenant.puerto_local),
   };
-  const clave = claveHcl(tenant);
+  const clave = claveOpenTofu(tenant);
   await writeFile(join(cwd, 'tenant.tfvars.json'), JSON.stringify(variables));
-  progreso(`Ejecutando ${nombre} init con el estado del tenant en S3.`);
-  await ejecutarHcl('init', '-input=false', '-no-color', '-lock-timeout=30s',
+  progreso('Ejecutando OpenTofu init con el estado del tenant en S3.');
+  await ejecutarTofu('init', '-input=false', '-no-color', '-lock-timeout=30s',
     `-backend-config=bucket=${config.bucket}`, `-backend-config=key=${clave}`,
-    `-backend-config=workspace_key_prefix=tenants/panel/${motor === 'terraform' ? 'terraform/' : ''}workspaces`);
-  progreso(`Ejecutando ${nombre} plan y revisando los cambios propuestos.`);
-  await ejecutarHcl('plan', '-input=false', '-no-color', '-lock-timeout=30s', '-var-file=tenant.tfvars.json', '-out=tenant.tfplan');
-  const planJson = await ejecutarHcl('show', '-json', 'tenant.tfplan');
+    '-backend-config=workspace_key_prefix=tenants/panel/workspaces');
+  progreso('Ejecutando OpenTofu plan y revisando los cambios propuestos.');
+  await ejecutarTofu('plan', '-input=false', '-no-color', '-lock-timeout=30s', '-var-file=tenant.tfvars.json', '-out=tenant.tfplan');
+  const planJson = await ejecutarTofu('show', '-json', 'tenant.tfplan');
   const plan = JSON.parse(planJson);
   revisarPlan(plan, tenant.identificador);
   if (config.escaneos) {
@@ -289,15 +278,15 @@ export async function desplegarHcl({ config, directorio, datosTenant, tenant, pr
           imdsv2: after.metadata_options?.[0]?.http_tokens === 'required',
           cifrado: after.root_block_device?.[0]?.encrypted === true,
         }));
-      await revisarSeguridad(config, tenant.motor, directorio, archivo, instancias, progreso, guardarEscaneos);
+      await revisarSeguridad(tenant.motor, directorio, archivo, instancias, progreso, guardarEscaneos);
     } finally {
       await rm(archivo, { force: true });
     }
   }
-  progreso(`Ejecutando ${nombre} apply para aprovisionar la red y las tres EC2.`);
-  await ejecutarHcl('apply', '-input=false', '-no-color', '-lock-timeout=30s', 'tenant.tfplan');
-  const outputs = JSON.parse(await ejecutarHcl('output', '-json'));
-  const versiones = JSON.parse(await ejecutarHcl('version', '-json'));
+  progreso('Ejecutando OpenTofu apply para aprovisionar la red y las tres EC2.');
+  await ejecutarTofu('apply', '-input=false', '-no-color', '-lock-timeout=30s', 'tenant.tfplan');
+  const outputs = JSON.parse(await ejecutarTofu('output', '-json'));
+  const versiones = JSON.parse(await ejecutarTofu('version', '-json'));
   const servidores = outputs.instances.value;
   const instancias = Object.fromEntries(esperado.map((rol) => [rol, servidores[rol].id]));
   progreso('Verificando el inventario de las tres EC2 y sus discos raíz.', 'ec2');
@@ -308,51 +297,9 @@ export async function desplegarHcl({ config, directorio, datosTenant, tenant, pr
     volumenes: Object.fromEntries(discos.map(({ rol, volumen }) => [rol, volumen])),
     app_commit: outputs.deployment.value.app_commit,
     ami, arranque: ansible ? 'ansible' : 'shell',
-    [carpetaHcl(tenant.motor)]: versiones.tofu_version ?? versiones.terraform_version,
+    opentofu: versiones.tofu_version ?? versiones.terraform_version,
     proveedores: versiones.provider_selections,
     plantilla: createHash('sha256').update(await readFile(join(cwd, 'main.tf'))).digest('hex'),
-  };
-}
-
-export async function desplegarCloudFormation({ config, directorio, datosTenant, tenant, progreso, guardarEscaneos, ejecutarComando = ejecutar }) {
-  await mkdir(directorio, { recursive: true });
-  const { aws, env } = await conectarAws(config, ejecutarComando, directorio);
-  const { ami, ansible } = await prepararArranque(aws, datosTenant, config, progreso);
-  const { Images } = await aws('ec2', 'describe-images', '--image-ids', ami);
-  if (Images.length !== 1 || Images[0].RootDeviceType !== 'ebs' || Images[0].Architecture !== 'x86_64' ||
-      !Images[0].RootDeviceName) throw new Error('La AMI fijada no tiene un disco raíz EBS x86_64.');
-  const plantilla = await generarPlantilla(tenant, { ami, discoRaiz: Images[0].RootDeviceName, limite: config.limite, ansible });
-  const cuerpo = JSON.stringify(plantilla);
-  if (Buffer.byteLength(cuerpo) > 51_200) throw new Error('La plantilla del tenant excede el tamaño en línea de CloudFormation.');
-  const huella = createHash('sha256').update(cuerpo).digest('hex');
-  const archivo = join(directorio, 'tenant.cloudformation.json');
-  await writeFile(archivo, cuerpo);
-  if (config.escaneos) {
-    const instancias = Object.entries(plantilla.Resources).filter(([, r]) => r.Type === 'AWS::EC2::Instance')
-      .map(([id, { Properties: p }]) => ({ id, comprobar_configuracion: true,
-        imdsv2: p.MetadataOptions?.HttpTokens === 'required',
-        cifrado: p.BlockDeviceMappings?.some(({ Ebs }) => Ebs?.Encrypted === true),
-      }));
-    await revisarSeguridad(config, tenant.motor, directorio, archivo, instancias, progreso, guardarEscaneos);
-  }
-  const pila = await aprovisionarPila(aws, { tenant, plantilla, archivo, huella, progreso });
-  const salidas = new Map(pila.Outputs?.map(({ OutputKey, OutputValue }) => [OutputKey, OutputValue]));
-  const instancias = Object.fromEntries(esperado.map((rol) =>
-    [rol, salidas.get(`Instancia${rol[0].toUpperCase() + rol.slice(1)}`)]));
-  if (new Set(Object.values(instancias)).size !== esperado.length ||
-      Object.values(instancias).some((id) => !/^i-[0-9a-f]{8}(?:[0-9a-f]{9})?$/.test(id ?? ''))) {
-    throw new Error('La pila no devolvió los identificadores de las tres capas.');
-  }
-  progreso('Verificando el inventario de las tres EC2 y sus discos raíz.', 'ec2');
-  const discos = await describirInstancias(aws, tenant.identificador, instancias);
-  await comprobarArranque(aws, Object.fromEntries(discos.map(({ rol, id }) => [rol, { id }])), progreso, ansible);
-  return {
-    pila: pila.StackId, instancias,
-    volumenes: Object.fromEntries(discos.map(({ rol, volumen }) => [rol, volumen])),
-    app_commit: salidas.get('AppCommit'), ami, arranque: ansible ? 'ansible' : 'shell',
-    cloudformation: plantilla.AWSTemplateFormatVersion,
-    aws_cli: (await ejecutarComando('aws', ['--version'], { cwd: directorio, env })).trim(),
-    plantilla: pila.Tags.find(({ Key }) => Key === 'TemplateDigest')?.Value,
   };
 }
 
@@ -378,7 +325,7 @@ export async function desplegarPulumi({ config, directorio, datosTenant, tenant,
           cifrado: entradas?.rootBlockDevice?.encrypted === true,
         };
       });
-    await revisarSeguridad(config, tenant.motor, directorio, join(cwd, 'package-lock.json'), instancias, progreso, guardarEscaneos);
+    await revisarSeguridad(tenant.motor, directorio, join(cwd, 'package-lock.json'), instancias, progreso, guardarEscaneos);
   }
   progreso('Ejecutando Pulumi up con el plan del tenant.');
   await pila.ejecutar('up', '--plan', archivo, '--yes', '--skip-preview');
@@ -520,12 +467,12 @@ export async function gestionarRetiro({ config, tenant, datosTenant, tipo, traba
   if (!Number.isSafeInteger(retiro.despliegueId) || !infraestructura?.instancias) {
     throw new Error('Falta el despliegue original del tenant.');
   }
-  const cwd = join(datosTenant, String(retiro.despliegueId), 'infra', carpetaHcl(tenant.motor));
+  const cwd = join(datosTenant, String(retiro.despliegueId), 'infra', 'opentofu');
   const { aws, env } = await conectarAws(config, ejecutarComando, cwd);
-  const ejecutarHcl = (...args) => ejecutarComando(motorHcl(tenant.motor), args, { cwd, env });
+  const ejecutarTofu = (...args) => ejecutarComando('tofu', args, { cwd, env });
   const metadata = JSON.parse(await readFile(join(cwd, '.terraform', 'terraform.tfstate'), 'utf8'));
   if (metadata.backend?.type !== 's3' || metadata.backend.config.bucket !== config.bucket ||
-      metadata.backend.config.key !== claveHcl(tenant)) {
+      metadata.backend.config.key !== claveOpenTofu(tenant)) {
     throw new Error('El estado remoto no corresponde a este tenant.');
   }
   const preparando = tipo === 'preparar-retiro';
@@ -533,85 +480,21 @@ export async function gestionarRetiro({ config, tenant, datosTenant, tipo, traba
   if (!Number.isSafeInteger(revision)) throw new Error('Prepara un plan nuevo antes de confirmar el retiro.');
   const archivo = `retiro-${revision}.tfplan`;
   if (preparando) {
-    progreso(`Generando el plan de retiro con ${tenant.motor === 'terraform' ? 'Terraform' : 'OpenTofu'}.`);
-    await ejecutarHcl('plan', '-destroy', '-input=false', '-no-color', '-lock-timeout=30s',
+    progreso('Generando el plan de retiro con OpenTofu.');
+    await ejecutarTofu('plan', '-destroy', '-input=false', '-no-color', '-lock-timeout=30s',
       '-var-file=tenant.tfvars.json', `-out=${archivo}`);
   }
   const huella = createHash('sha256').update(await readFile(join(cwd, archivo))).digest('hex');
-  const resumen = resumirRetiro(JSON.parse(await ejecutarHcl('show', '-json', archivo)), tenant.identificador, infraestructura);
+  const resumen = resumirRetiro(JSON.parse(await ejecutarTofu('show', '-json', archivo)), tenant.identificador, infraestructura);
   await comprobarDiscosDelPlan(aws, resumen.discos, infraestructura);
   if (preparando) return { ...resumen, huella };
   if (huella !== retiro.revision.huella) throw new Error('El plan cambió. Prepara un plan nuevo para revisarlo.');
   progreso('Aplicando el retiro confirmado en AWS.');
   if (resumen.recursos.length) {
-    await ejecutarHcl('apply', '-input=false', '-no-color', '-lock-timeout=30s', archivo);
+    await ejecutarTofu('apply', '-input=false', '-no-color', '-lock-timeout=30s', archivo);
   }
   await confirmarRetiroAws(aws, tenant.identificador, infraestructura, resumen.discos);
   return { recursos: resumen.recursos.length, discos: resumen.discos.length };
-}
-
-export async function gestionarRetiroCloudFormation({ config, tenant, tipo, retiro, infraestructura, progreso,
-  ejecutarComando = ejecutar }) {
-  const id = infraestructura?.pila;
-  if (!id?.startsWith(`arn:aws:cloudformation:${region}:${config.cuenta}:stack/pfm2-cfn-${tenant.identificador}/`) ||
-      !infraestructura.volumenes || !infraestructura.instancias) {
-    throw new Error('Falta la pila original de CloudFormation del tenant.');
-  }
-  const { aws } = await conectarAws(config, ejecutarComando);
-  const preparando = tipo === 'preparar-retiro';
-  progreso(preparando ? 'Consultando los recursos y discos de la pila de CloudFormation.' : 'Revalidando la revisión de CloudFormation.');
-  let pila = await consultarPila(aws, id);
-  if (pila) {
-    verificarPila(pila, tenant, id);
-    if (pila.StackStatus === 'DELETE_IN_PROGRESS') {
-      await borrarPila(aws, id);
-      pila = null;
-    }
-  }
-  const recursos = [];
-  const discos = [];
-  if (pila) {
-    if (!['CREATE_COMPLETE', 'DELETE_FAILED'].includes(pila.StackStatus)) {
-      throw new Error('La pila está cambiando o requiere revisión en CloudFormation.');
-    }
-    const inventario = await recursosPila(aws, id);
-    for (const recurso of inventario.filter(({ ResourceStatus }) => ResourceStatus !== 'DELETE_COMPLETE')) {
-      if (!recurso.PhysicalResourceId) throw new Error('La pila contiene un recurso sin identidad confirmada.');
-      recursos.push({ direccion: recurso.LogicalResourceId, identificador: recurso.PhysicalResourceId });
-    }
-    const idsDiscos = [];
-    for (const rol of esperado) {
-      const recurso = inventario.find(({ LogicalResourceId }) => LogicalResourceId === `Instancia${rol[0].toUpperCase() + rol.slice(1)}`);
-      if (!recurso || recurso.PhysicalResourceId !== infraestructura.instancias[rol] || recurso.ResourceType !== 'AWS::EC2::Instance') {
-        throw new Error('Las instancias de la pila no coinciden con el tenant registrado.');
-      }
-      if (recurso.ResourceStatus !== 'DELETE_COMPLETE') idsDiscos.push({ rol, id: infraestructura.volumenes[rol] });
-    }
-    if (idsDiscos.length) {
-      await comprobarDiscosDelPlan(aws, idsDiscos, infraestructura);
-      const { Volumes } = await aws('ec2', 'describe-volumes', '--volume-ids', ...idsDiscos.map(({ id }) => id));
-      for (const disco of idsDiscos) {
-        const volumen = Volumes.find(({ VolumeId }) => VolumeId === disco.id);
-        if (!volumen) throw new Error('AWS no devolvió uno de los discos raíz del tenant.');
-        discos.push({ ...disco, gib: volumen.Size });
-      }
-    }
-  }
-  const huella = createHash('sha256').update(JSON.stringify([id, recursos, discos])).digest('hex');
-  if (preparando) return { recursos, discos, huella };
-  if (huella !== retiro.revision?.huella) throw new Error('La pila cambió. Prepara y revisa un inventario nuevo antes de retirarla.');
-  progreso('Retirando la pila confirmada en CloudFormation.');
-  if (pila) await borrarPila(aws, id);
-  await confirmarRetiroAws(aws, tenant.identificador, infraestructura, discos);
-  for (const clave of ['db', 'admin']) {
-    const secreto = await aws('secretsmanager', 'describe-secret', '--secret-id', `${prefijoSecretos(tenant.identificador)}/${clave}`)
-      .catch((error) => {
-        if (error.awsCode === 'ResourceNotFoundException') return null;
-        throw error;
-      });
-    if (secreto && !secreto.DeletedDate) throw new Error('AWS todavía informa un secreto activo del tenant.');
-  }
-  return { recursos: recursos.length, discos: discos.length };
 }
 
 export async function gestionarRetiroPulumi({ config, tenant, datosTenant, tipo, retiro, infraestructura, progreso,
@@ -653,13 +536,17 @@ export async function gestionarRetiroPulumi({ config, tenant, datosTenant, tipo,
 
 export function ejecutarOperacionAws(trabajo) {
   const motor = trabajo.tenant.motor;
+  if (!catalogo.motoresEjecutables.includes(motor)) {
+    throw new Error('El motor de este tenant fue retirado del panel.');
+  }
   if (trabajo.tipo === 'desplegar') {
-    if (motor === 'cloudformation') return desplegarCloudFormation(trabajo);
+    if (!trabajo.config.escaneos) {
+      trabajo.progreso('Escaneos omitidos porque PFM2_ESCANEOS=0.', 'scanners', 'aviso');
+    }
     if (motor === 'pulumi') return desplegarPulumi(trabajo);
-    return desplegarHcl(trabajo);
+    return desplegarOpenTofu(trabajo);
   }
   if (['suspender', 'reanudar'].includes(trabajo.tipo)) return cambiarEstadoEc2(trabajo);
-  if (motor === 'cloudformation') return gestionarRetiroCloudFormation(trabajo);
   if (motor === 'pulumi') return gestionarRetiroPulumi(trabajo);
   return gestionarRetiro(trabajo);
 }

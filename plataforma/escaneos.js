@@ -4,7 +4,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const raiz = fileURLToPath(new URL('../', import.meta.url));
-const herramientas = join(raiz, 'asistencia', 'infra', 'cloudformation', '.tools');
+const herramientas = join(raiz, 'plataforma', 'data', 'herramientas');
 const politica = join(raiz, 'infra', 'seguridad', 'tenant.rego');
 
 function ejecutar(programa, args, cwd) {
@@ -28,7 +28,7 @@ function resumir(codigo, permitidos, hallazgos) {
   return { hallazgos: reglas.length, reglas: [...new Set(reglas)].slice(0, 30) };
 }
 
-export async function escanearDespliegue({ motor, directorio, archivo, instancias, informar = () => {} }) {
+export async function escanearDespliegue({ motor, directorio, archivo, instancias, informar = () => {}, guardarResultados = () => {} }) {
   const dir = join(directorio, 'escaneos');
   await mkdir(dir, { recursive: true });
   const ejecutarLocal = (nombre, args) => ejecutar(herramienta(nombre), args, dir);
@@ -41,7 +41,7 @@ export async function escanearDespliegue({ motor, directorio, archivo, instancia
   const controles = [
     ['trivy', dependencia ? 'Dependencias del programa Pulumi' : 'Configuración del motor', async () => {
       const args = dependencia ? ['fs', '--scanners', 'vuln', '--pkg-types', 'library'] :
-        ['config', '--misconfig-scanners', motor === 'cloudformation' ? 'cloudformation' : 'terraformplan-json'];
+        ['config', '--misconfig-scanners', 'terraformplan-json'];
       const { codigo, stdout } = await ejecutarLocal('trivy',
         [...args, '--quiet', '--format', 'json', '--exit-code', '10', '--cache-dir', join(herramientas, 'trivy-cache'), archivo]);
       const informe = JSON.parse(stdout);
@@ -98,14 +98,17 @@ export async function escanearDespliegue({ motor, directorio, archivo, instancia
       version = v.stdout.match(/\b\d+\.\d+\.\d+\b/)?.[0] ?? null;
       if (v.codigo !== 0 || !version) throw new Error('Versión no disponible');
       const resumen = await comprobar();
-      informar(`${etiqueta} ${version}: ${resumen.hallazgos} hallazgos.`,
-        resumen.hallazgos ? 'aviso' : 'exito');
       resultados.push({ nombre, alcance, fecha, version,
         estado: resumen.hallazgos ? 'hallazgos' : 'sin-hallazgos', ...resumen });
-    } catch {
-      informar(`${etiqueta} no completó el escaneo.`, 'error');
-      resultados.push({ nombre, alcance, fecha, version, estado: 'error', hallazgos: null, reglas: [] });
+    } catch (error) {
+      const motivo = error.code === 'ENOENT' ? 'No se encontró el ejecutable.' :
+        error.killed ? 'Se agotó el tiempo de ejecución.' : 'La herramienta falló o devolvió un informe inválido.';
+      resultados.push({ nombre, alcance, fecha, version, estado: 'error', hallazgos: null, reglas: [], motivo });
     }
+    guardarResultados(resultados);
+    const resultado = resultados.at(-1);
+    if (resultado.estado === 'error') informar(`${etiqueta}: ${resultado.motivo}`, 'error');
+    else informar(`${etiqueta} ${version}: ${resultado.hallazgos} hallazgos.`, resultado.hallazgos ? 'aviso' : 'exito');
   }
   return resultados;
 }

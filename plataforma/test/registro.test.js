@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { setTimeout as esperar } from 'node:timers/promises';
-import { cambiarEstadoEc2, configurarDespliegue, desplegarHcl, gestionarRetiro, iniciarTrabajador, seleccionarAmi } from '../despliegues.js';
+import { cambiarEstadoEc2, configurarDespliegue, desplegarOpenTofu, ejecutarOperacionAws, gestionarRetiro, iniciarTrabajador, seleccionarAmi } from '../despliegues.js';
 import { catalogo } from '../catalogo.js';
 import { consultarAlertas, iniciarHistorialAlertas } from '../alertas.js';
 import { configurarAcceso } from '../acceso.js';
@@ -170,6 +170,14 @@ test('ofrece el catálogo, valida los campos y registra un identificador único 
   assert.equal(catalogo.region, 'us-east-2');
   assert.deepEqual(catalogo.planes.map(({ id }) => id), ['basico', 'estandar', 'avanzado']);
 
+  assert.deepEqual(catalogo.motores.map(({ id }) => id), ['opentofu', 'pulumi']);
+  assert.deepEqual(catalogo.motoresEjecutables, ['opentofu', 'pulumi']);
+  for (const motor of ['terraform', 'cloudformation']) {
+    const respuesta = await registrar(pedir, url, { ...solicitud, motor });
+    assert.equal(respuesta.status, 422);
+    assert.ok((await respuesta.json()).errores.motor);
+  }
+
   const invalido = await registrar(pedir, url, { ...solicitud, identificador: '../foo', plan: 'inexistente' });
   assert.equal(invalido.status, 422);
   assert.deepEqual(Object.keys((await invalido.json()).errores), ['identificador', 'plan']);
@@ -299,6 +307,28 @@ test('valida la AMI privada de la cuenta y la conserva en reintentos', async (t)
     directorio, { ...config, amiPersonalizada: 'ami-1234567890abcdef0' }), ami);
 });
 
+test('conserva el historial de motores retirados y rechaza trabajos pendientes para esos motores', () => {
+  const registro = abrirRegistro(':memory:');
+  try {
+    const tenant = registro.crear({ ...solicitud, motor: 'terraform', plan: catalogo.planes[0] }, 'operador');
+    assert.equal(registro.listar()[0].motor, 'terraform');
+    assert.equal(registro.actividad(tenant.identificador).auditoria[0].accion, 'registrar');
+    assert.equal(registro.encolar(tenant.identificador), undefined);
+    for (const tipo of ['desplegar', 'suspender', 'reanudar', 'preparar-retiro', 'retirar']) {
+      assert.throws(() => ejecutarOperacionAws({ tenant, tipo }), /motor.*retirado/);
+    }
+  } finally {
+    registro.cerrar();
+  }
+});
+
+test('habilita los escaneos por defecto y permite desactivarlos explícitamente', () => {
+  const env = { PFM2_AWS_ACCOUNT: '123456789012', PFM2_STATE_BUCKET: 'estado-de-pruebas' };
+  assert.equal(configurarDespliegue(env).escaneos, true);
+  assert.equal(configurarDespliegue({ ...env, PFM2_ESCANEOS: '1' }).escaneos, true);
+  assert.equal(configurarDespliegue({ ...env, PFM2_ESCANEOS: '0' }).escaneos, false);
+});
+
 test('OpenTofu usa el estado del tenant y detiene un plan que reemplaza una instancia', async (t) => {
   const directorio = await mkdtemp(join(tmpdir(), 'uagrm-opentofu-'));
   t.after(() => rm(directorio, { recursive: true }));
@@ -324,7 +354,7 @@ test('OpenTofu usa el estado del tenant y detiene un plan que reemplaza una inst
     return '';
   }
   await assert.rejects(
-    desplegarHcl({ config, directorio: join(directorio, 'intento'), datosTenant: directorio,
+    desplegarOpenTofu({ config, directorio: join(directorio, 'intento'), datosTenant: directorio,
       tenant, progreso() {}, ejecutarComando: simular }),
     /fuera del despliegue inicial/,
   );

@@ -2,7 +2,7 @@
   "uid": "pfm2-tenants",
   "title": "Salud de tenants · UAGRM Asistencia",
   "schemaVersion": 39,
-  "version": 1,
+  "version": 2,
   "timezone": "America/La_Paz",
   "editable": false,
   "refresh": "30s",
@@ -20,8 +20,8 @@
           "type": "prometheus",
           "uid": "pfm2-prometheus"
         },
-        "query": "label_values(pfm2_muestra_up, entorno)",
-        "definition": "label_values(pfm2_muestra_up, entorno)",
+        "query": "label_values(pfm2_muestra_up{job=\"pfm2\"}, entorno)",
+        "definition": "label_values(pfm2_muestra_up{job=\"pfm2\"}, entorno)",
         "refresh": 2,
         "includeAll": true,
         "allValue": ".*",
@@ -29,7 +29,8 @@
         "current": {
           "text": "All",
           "value": "$__all"
-        }
+        },
+        "sort": 1
       },
       {
         "name": "tenant",
@@ -39,8 +40,8 @@
           "type": "prometheus",
           "uid": "pfm2-prometheus"
         },
-        "query": "label_values(pfm2_muestra_up{entorno=~\"$entorno\"}, tenant)",
-        "definition": "label_values(pfm2_muestra_up{entorno=~\"$entorno\"}, tenant)",
+        "query": "label_values(pfm2_muestra_up{job=\"pfm2\",entorno=~\"${entorno:regex}\"}, tenant)",
+        "definition": "label_values(pfm2_muestra_up{job=\"pfm2\",entorno=~\"${entorno:regex}\"}, tenant)",
         "refresh": 2,
         "includeAll": true,
         "allValue": ".*",
@@ -48,40 +49,1021 @@
         "current": {
           "text": "All",
           "value": "$__all"
-        }
+        },
+        "sort": 1
       }
     ]
   },
   "panels": [
     {
-      "id": 1,
-      "type": "timeseries",
-      "title": "Disponibilidad de los servicios",
+      "id": 20,
+      "type": "text",
+      "title": "",
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 24,
+        "h": 4
+      },
+      "transparent": true,
+      "options": {
+        "mode": "markdown",
+        "content": "## UAGRM Asistencia · Centro de operaciones\nCompara instituciones con **Entorno** y **Tenant**. Consulta primero el estado actual y usa el historial para ubicar el inicio de una incidencia."
+      }
+    },
+    {
+      "id": 21,
+      "type": "stat",
+      "title": "Tenants con telemetría",
+      "gridPos": {
+        "x": 0,
+        "y": 4,
+        "w": 6,
+        "h": 4
+      },
+      "description": "Instituciones distintas que emiten al menos una serie de muestreo, incluso si alguna sonda no responde.",
       "datasource": {
         "type": "prometheus",
         "uid": "pfm2-prometheus"
       },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "(count(count by (tenant, entorno) (pfm2_muestra_up{job=\"pfm2\",entorno=~\"${entorno:regex}\",tenant=~\"${tenant:regex}\"})) or vector(0))\nand on() ((max(up{job=\"pfm2\"}) == 1) and on() (max(pfm2_colector_ok{job=\"pfm2\"}) == 1) and on() ((time() - max(pfm2_colector_timestamp_seconds{job=\"pfm2\"})) <= 180))",
+          "legendFormat": "",
+          "instant": true,
+          "range": false,
+          "format": "time_series",
+          "editorMode": "code",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "pfm2-prometheus"
+          }
+        }
+      ],
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "textMode": "value",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "text": {
+          "valueSize": 34
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "noValue": "Sin datos",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "value": null,
+                "color": "#94A3B8"
+              },
+              {
+                "value": 1,
+                "color": "#60A5FA"
+              }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 22,
+      "type": "stat",
+      "title": "Capas operativas",
       "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 0,
-        "y": 0
+        "x": 6,
+        "y": 4,
+        "w": 6,
+        "h": 4
+      },
+      "description": "Proporción de capas observadas con una muestra válida y estado operativo. Las sondas sin señal se incluyen en el total.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "pfm2-prometheus"
       },
       "targets": [
         {
           "refId": "A",
-          "expr": "pfm2_servicio_up{tenant=~\"$tenant\",entorno=~\"$entorno\"}",
-          "legendFormat": "{{tenant}} · {{rol}}"
+          "expr": "((count((pfm2_servicio_up{job=\"pfm2\",entorno=~\"${entorno:regex}\",tenant=~\"${tenant:regex}\"} and on(tenant, entorno, rol) (pfm2_muestra_up{job=\"pfm2\",entorno=~\"${entorno:regex}\",tenant=~\"${tenant:regex}\"} == 1)) == 1) or (0 * count(pfm2_muestra_up{job=\"pfm2\",entorno=~\"${entorno:regex}\",tenant=~\"${tenant:regex}\"}))) / count(pfm2_muestra_up{job=\"pfm2\",entorno=~\"${entorno:regex}\",tenant=~\"${tenant:regex}\"}))\nand on() ((max(up{job=\"pfm2\"}) == 1) and on() (max(pfm2_colector_ok{job=\"pfm2\"}) == 1) and on() ((time() - max(pfm2_colector_timestamp_seconds{job=\"pfm2\"})) <= 180))",
+          "legendFormat": "",
+          "instant": true,
+          "range": false,
+          "format": "time_series",
+          "editorMode": "code",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "pfm2-prometheus"
+          }
         }
       ],
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "textMode": "value",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "text": {
+          "valueSize": 34
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "decimals": 1,
+          "noValue": "Sin datos",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "value": null,
+                "color": "#FB7185"
+              },
+              {
+                "value": 0.01,
+                "color": "#FBBF24"
+              },
+              {
+                "value": 1,
+                "color": "#2DD4BF"
+              }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 23,
+      "type": "stat",
+      "title": "Alertas activas",
+      "gridPos": {
+        "x": 12,
+        "y": 4,
+        "w": 6,
+        "h": 4
+      },
+      "description": "Reglas de Prometheus en estado firing para la selección. Incluye la alerta global del colector.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "pfm2-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "count(ALERTS{alertstate=\"firing\",tenant!=\"\",entorno=~\"${entorno:regex}\",tenant=~\"${tenant:regex}\"}\nor ALERTS{alertstate=\"firing\",alertname=\"ColectorNoDisponible\"}) or vector(0)",
+          "legendFormat": "",
+          "instant": true,
+          "range": false,
+          "format": "time_series",
+          "editorMode": "code",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "pfm2-prometheus"
+          }
+        }
+      ],
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "textMode": "value",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "text": {
+          "valueSize": 34
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "noValue": "Sin datos",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "value": null,
+                "color": "#2DD4BF"
+              },
+              {
+                "value": 1,
+                "color": "#FB7185"
+              }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 24,
+      "type": "stat",
+      "title": "Telemetría del colector",
+      "gridPos": {
+        "x": 18,
+        "y": 4,
+        "w": 6,
+        "h": 4
+      },
+      "description": "Requiere que el scrape y el colector estén disponibles y que el último ciclo tenga como máximo 180 segundos.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "pfm2-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "(0 * ((max(up{job=\"pfm2\"}) == 1) and on() (max(pfm2_colector_ok{job=\"pfm2\"}) == 1) and on() ((time() - max(pfm2_colector_timestamp_seconds{job=\"pfm2\"})) <= 180)) + 1) or vector(0)",
+          "legendFormat": "",
+          "instant": true,
+          "range": false,
+          "format": "time_series",
+          "editorMode": "code",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "pfm2-prometheus"
+          }
+        }
+      ],
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "textMode": "value",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "text": {
+          "valueSize": 34
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "noValue": "Sin datos",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "value": null,
+                "color": "#FBBF24"
+              },
+              {
+                "value": 1,
+                "color": "#2DD4BF"
+              }
+            ]
+          },
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "Sin señal",
+                  "color": "#FBBF24",
+                  "index": 0
+                },
+                "1": {
+                  "text": "Actualizada",
+                  "color": "#2DD4BF",
+                  "index": 1
+                }
+              }
+            }
+          ]
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 30,
+      "type": "row",
+      "title": "Disponibilidad · Nginx, API y MySQL",
+      "gridPos": {
+        "x": 0,
+        "y": 8,
+        "w": 24,
+        "h": 1
+      },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 1,
+      "type": "state-timeline",
+      "title": "Historial de salud por capa",
+      "gridPos": {
+        "x": 0,
+        "y": 9,
+        "w": 16,
+        "h": 10
+      },
+      "description": "Verde: operativo. Rosa: caído con muestra válida. Ámbar: sonda sin señal útil. Los huecos indican ausencia de series o del colector. Frontend comprueba Nginx, backend el servicio Node.js y database MySQL.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "pfm2-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "((pfm2_servicio_up{job=\"pfm2\",entorno=~\"${entorno:regex}\",tenant=~\"${tenant:regex}\"} and on(tenant, entorno, rol) (pfm2_muestra_up{job=\"pfm2\",entorno=~\"${entorno:regex}\",tenant=~\"${tenant:regex}\"} == 1))\nor on(tenant, entorno, rol) (2 + 0 * pfm2_muestra_up{job=\"pfm2\",entorno=~\"${entorno:regex}\",tenant=~\"${tenant:regex}\"}))\nand on() ((max(up{job=\"pfm2\"}) == 1) and on() (max(pfm2_colector_ok{job=\"pfm2\"}) == 1) and on() ((time() - max(pfm2_colector_timestamp_seconds{job=\"pfm2\"})) <= 180))",
+          "legendFormat": "{{tenant}} · {{rol}}",
+          "instant": false,
+          "range": true,
+          "format": "time_series",
+          "editorMode": "code",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "pfm2-prometheus"
+          }
+        }
+      ],
+      "options": {
+        "mergeValues": true,
+        "showValue": "auto",
+        "alignValue": "center",
+        "rowHeight": 0.78,
+        "legend": {
+          "showLegend": false
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "1": {
+                  "text": "Operativo",
+                  "color": "#2DD4BF",
+                  "index": 0
+                },
+                "0": {
+                  "text": "Caído",
+                  "color": "#FB7185",
+                  "index": 1
+                },
+                "2": {
+                  "text": "Sin señal",
+                  "color": "#FBBF24",
+                  "index": 2
+                }
+              }
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "value": null,
+                "color": "#FB7185"
+              },
+              {
+                "value": 1,
+                "color": "#2DD4BF"
+              },
+              {
+                "value": 2,
+                "color": "#FBBF24"
+              }
+            ]
+          },
+          "custom": {
+            "lineWidth": 0,
+            "fillOpacity": 85,
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 25,
+      "type": "piechart",
+      "title": "Estado actual de las capas",
+      "gridPos": {
+        "x": 16,
+        "y": 9,
+        "w": 8,
+        "h": 10
+      },
+      "description": "Cada capa observada pertenece a una sola categoría. Los sectores muestran su proporción dentro de la selección.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "pfm2-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "(count(((pfm2_servicio_up{job=\"pfm2\",entorno=~\"${entorno:regex}\",tenant=~\"${tenant:regex}\"} and on(tenant, entorno, rol) (pfm2_muestra_up{job=\"pfm2\",entorno=~\"${entorno:regex}\",tenant=~\"${tenant:regex}\"} == 1))\nor on(tenant, entorno, rol) (2 + 0 * pfm2_muestra_up{job=\"pfm2\",entorno=~\"${entorno:regex}\",tenant=~\"${tenant:regex}\"})) == 1) or (0 * count(pfm2_muestra_up{job=\"pfm2\",entorno=~\"${entorno:regex}\",tenant=~\"${tenant:regex}\"})))\nand on() ((max(up{job=\"pfm2\"}) == 1) and on() (max(pfm2_colector_ok{job=\"pfm2\"}) == 1) and on() ((time() - max(pfm2_colector_timestamp_seconds{job=\"pfm2\"})) <= 180))",
+          "legendFormat": "Operativo",
+          "instant": true,
+          "range": false,
+          "format": "time_series",
+          "editorMode": "code",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "pfm2-prometheus"
+          }
+        },
+        {
+          "refId": "B",
+          "expr": "(count(((pfm2_servicio_up{job=\"pfm2\",entorno=~\"${entorno:regex}\",tenant=~\"${tenant:regex}\"} and on(tenant, entorno, rol) (pfm2_muestra_up{job=\"pfm2\",entorno=~\"${entorno:regex}\",tenant=~\"${tenant:regex}\"} == 1))\nor on(tenant, entorno, rol) (2 + 0 * pfm2_muestra_up{job=\"pfm2\",entorno=~\"${entorno:regex}\",tenant=~\"${tenant:regex}\"})) == 0) or (0 * count(pfm2_muestra_up{job=\"pfm2\",entorno=~\"${entorno:regex}\",tenant=~\"${tenant:regex}\"})))\nand on() ((max(up{job=\"pfm2\"}) == 1) and on() (max(pfm2_colector_ok{job=\"pfm2\"}) == 1) and on() ((time() - max(pfm2_colector_timestamp_seconds{job=\"pfm2\"})) <= 180))",
+          "legendFormat": "Caído",
+          "instant": true,
+          "range": false,
+          "format": "time_series",
+          "editorMode": "code",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "pfm2-prometheus"
+          }
+        },
+        {
+          "refId": "C",
+          "expr": "(count(((pfm2_servicio_up{job=\"pfm2\",entorno=~\"${entorno:regex}\",tenant=~\"${tenant:regex}\"} and on(tenant, entorno, rol) (pfm2_muestra_up{job=\"pfm2\",entorno=~\"${entorno:regex}\",tenant=~\"${tenant:regex}\"} == 1))\nor on(tenant, entorno, rol) (2 + 0 * pfm2_muestra_up{job=\"pfm2\",entorno=~\"${entorno:regex}\",tenant=~\"${tenant:regex}\"})) == 2) or (0 * count(pfm2_muestra_up{job=\"pfm2\",entorno=~\"${entorno:regex}\",tenant=~\"${tenant:regex}\"})))\nand on() ((max(up{job=\"pfm2\"}) == 1) and on() (max(pfm2_colector_ok{job=\"pfm2\"}) == 1) and on() ((time() - max(pfm2_colector_timestamp_seconds{job=\"pfm2\"})) <= 180))",
+          "legendFormat": "Sin señal",
+          "instant": true,
+          "range": false,
+          "format": "time_series",
+          "editorMode": "code",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "pfm2-prometheus"
+          }
+        }
+      ],
+      "options": {
+        "pieType": "donut",
+        "displayLabels": [
+          "percent"
+        ],
+        "legend": {
+          "showLegend": true,
+          "displayMode": "table",
+          "placement": "bottom",
+          "values": [
+            "value",
+            "percent"
+          ]
+        },
+        "tooltip": {
+          "mode": "single"
+        },
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "color": {
+            "mode": "palette-classic"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byFrameRefID",
+              "options": "A"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#2DD4BF"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byFrameRefID",
+              "options": "B"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#FB7185"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byFrameRefID",
+              "options": "C"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#FBBF24"
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": 31,
+      "type": "row",
+      "title": "Experiencia de la API · Sonda y errores HTTP",
+      "gridPos": {
+        "x": 0,
+        "y": 19,
+        "w": 24,
+        "h": 1
+      },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 26,
+      "type": "stat",
+      "title": "API vía Nginx",
+      "gridPos": {
+        "x": 0,
+        "y": 20,
+        "w": 24,
+        "h": 4
+      },
+      "description": "Estado de /api/me por institución. La sonda espera HTTP 401 sin sesión. Cuando falta la sonda de API y consta que Nginx está caído, el acceso también figura como caído. Las demás ausencias aparecen como sin señal.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "pfm2-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "((pfm2_api_up{job=\"pfm2\",entorno=~\"${entorno:regex}\",tenant=~\"${tenant:regex}\",rol=\"frontend\"} and on(tenant, entorno, rol) (pfm2_muestra_up{job=\"pfm2\",entorno=~\"${entorno:regex}\",tenant=~\"${tenant:regex}\",rol=\"frontend\"} == 1))\nor on(tenant, entorno, rol) ((pfm2_servicio_up{job=\"pfm2\",entorno=~\"${entorno:regex}\",tenant=~\"${tenant:regex}\",rol=\"frontend\"} == 0) and on(tenant, entorno, rol) (pfm2_muestra_up{job=\"pfm2\",entorno=~\"${entorno:regex}\",tenant=~\"${tenant:regex}\",rol=\"frontend\"} == 1))\nor on(tenant, entorno, rol) (2 + 0 * pfm2_muestra_up{job=\"pfm2\",entorno=~\"${entorno:regex}\",tenant=~\"${tenant:regex}\",rol=\"frontend\"}))\nand on() ((max(up{job=\"pfm2\"}) == 1) and on() (max(pfm2_colector_ok{job=\"pfm2\"}) == 1) and on() ((time() - max(pfm2_colector_timestamp_seconds{job=\"pfm2\"})) <= 180))",
+          "legendFormat": "{{tenant}}",
+          "instant": true,
+          "range": false,
+          "format": "time_series",
+          "editorMode": "code",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "pfm2-prometheus"
+          }
+        }
+      ],
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "textMode": "value_and_name",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "wideLayout": true,
+        "text": {
+          "titleSize": 13,
+          "valueSize": 24
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "1": {
+                  "text": "Operativo",
+                  "color": "#2DD4BF",
+                  "index": 0
+                },
+                "0": {
+                  "text": "Caído",
+                  "color": "#FB7185",
+                  "index": 1
+                },
+                "2": {
+                  "text": "Sin señal",
+                  "color": "#FBBF24",
+                  "index": 2
+                }
+              }
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "value": null,
+                "color": "#FB7185"
+              },
+              {
+                "value": 1,
+                "color": "#2DD4BF"
+              },
+              {
+                "value": 2,
+                "color": "#FBBF24"
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          },
+          "noValue": "Sin datos"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Latencia de la sonda",
+      "gridPos": {
+        "x": 0,
+        "y": 24,
+        "w": 12,
+        "h": 9
+      },
+      "description": "Tiempo de respuesta de /api/me a través de Nginx. Solo se registra para sondeos exitosos. La línea ámbar marca 1 s.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "pfm2-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "(pfm2_api_latencia_seconds{job=\"pfm2\",entorno=~\"${entorno:regex}\",tenant=~\"${tenant:regex}\"})\nand on() ((max(up{job=\"pfm2\"}) == 1) and on() (max(pfm2_colector_ok{job=\"pfm2\"}) == 1) and on() ((time() - max(pfm2_colector_timestamp_seconds{job=\"pfm2\"})) <= 180))",
+          "legendFormat": "{{tenant}}",
+          "instant": false,
+          "range": true,
+          "format": "time_series",
+          "editorMode": "code",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "pfm2-prometheus"
+          }
+        }
+      ],
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "min": 0,
+          "color": {
+            "mode": "palette-classic-by-name"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "value": null,
+                "color": "#2DD4BF"
+              },
+              {
+                "value": 1,
+                "color": "#FBBF24"
+              }
+            ]
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "fillOpacity": 17,
+            "gradientMode": "opacity",
+            "showPoints": "auto",
+            "pointSize": 3,
+            "spanNulls": false,
+            "thresholdsStyle": {
+              "mode": "line"
+            },
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Respuestas 5xx · Ventana móvil de 5 min",
+      "gridPos": {
+        "x": 12,
+        "y": 24,
+        "w": 12,
+        "h": 9
+      },
+      "description": "Cada barra muestra el conteo de los cinco minutos anteriores a la muestra. Las ventanas se solapan. Sin el log de Nginx correspondiente no hay serie. La línea ámbar marca cinco errores.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "pfm2-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "(pfm2_api_errores_5m{job=\"pfm2\",entorno=~\"${entorno:regex}\",tenant=~\"${tenant:regex}\"})\nand on() ((max(up{job=\"pfm2\"}) == 1) and on() (max(pfm2_colector_ok{job=\"pfm2\"}) == 1) and on() ((time() - max(pfm2_colector_timestamp_seconds{job=\"pfm2\"})) <= 180))",
+          "legendFormat": "{{tenant}}",
+          "instant": false,
+          "range": true,
+          "format": "time_series",
+          "editorMode": "code",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "pfm2-prometheus"
+          }
+        }
+      ],
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
       "fieldConfig": {
         "defaults": {
           "unit": "none",
           "min": 0,
-          "max": 1,
+          "color": {
+            "mode": "palette-classic-by-name"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "value": null,
+                "color": "#2DD4BF"
+              },
+              {
+                "value": 5,
+                "color": "#FBBF24"
+              }
+            ]
+          },
           "custom": {
-            "lineWidth": 2,
-            "fillOpacity": 10
+            "drawStyle": "bars",
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "fillOpacity": 72,
+            "gradientMode": "none",
+            "showPoints": "never",
+            "pointSize": 3,
+            "spanNulls": false,
+            "thresholdsStyle": {
+              "mode": "line"
+            },
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 32,
+      "type": "row",
+      "title": "Capacidad · Uso actual y evolución",
+      "gridPos": {
+        "x": 0,
+        "y": 33,
+        "w": 24,
+        "h": 1
+      },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "id": 27,
+      "type": "bargauge",
+      "title": "CPU · Mayor uso actual",
+      "gridPos": {
+        "x": 0,
+        "y": 34,
+        "w": 12,
+        "h": 8
+      },
+      "description": "Hasta seis instancias con mayor uso en la selección. Las barras van de 0 a 100 %. Ámbar desde 85 % y rosa desde 95 %.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "pfm2-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "(topk(6, pfm2_cpu_ratio{job=\"pfm2\",entorno=~\"${entorno:regex}\",tenant=~\"${tenant:regex}\"}))\nand on() ((max(up{job=\"pfm2\"}) == 1) and on() (max(pfm2_colector_ok{job=\"pfm2\"}) == 1) and on() ((time() - max(pfm2_colector_timestamp_seconds{job=\"pfm2\"})) <= 180))",
+          "legendFormat": "{{tenant}} · {{rol}}",
+          "instant": true,
+          "range": false,
+          "format": "time_series",
+          "editorMode": "code",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "pfm2-prometheus"
+          }
+        }
+      ],
+      "options": {
+        "displayMode": "gradient",
+        "orientation": "horizontal",
+        "showUnfilled": true,
+        "valueMode": "color",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "decimals": 1,
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "value": null,
+                "color": "#2DD4BF"
+              },
+              {
+                "value": 0.7,
+                "color": "#60A5FA"
+              },
+              {
+                "value": 0.85,
+                "color": "#FBBF24"
+              },
+              {
+                "value": 0.95,
+                "color": "#FB7185"
+              }
+            ]
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 28,
+      "type": "bargauge",
+      "title": "Memoria · Mayor uso actual",
+      "gridPos": {
+        "x": 12,
+        "y": 34,
+        "w": 12,
+        "h": 8
+      },
+      "description": "Hasta seis instancias con mayor uso en la selección. Las barras van de 0 a 100 %. Ámbar desde 85 % y rosa desde 95 %.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "pfm2-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "(topk(6, pfm2_memoria_ratio{job=\"pfm2\",entorno=~\"${entorno:regex}\",tenant=~\"${tenant:regex}\"}))\nand on() ((max(up{job=\"pfm2\"}) == 1) and on() (max(pfm2_colector_ok{job=\"pfm2\"}) == 1) and on() ((time() - max(pfm2_colector_timestamp_seconds{job=\"pfm2\"})) <= 180))",
+          "legendFormat": "{{tenant}} · {{rol}}",
+          "instant": true,
+          "range": false,
+          "format": "time_series",
+          "editorMode": "code",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "pfm2-prometheus"
+          }
+        }
+      ],
+      "options": {
+        "displayMode": "gradient",
+        "orientation": "horizontal",
+        "showUnfilled": true,
+        "valueMode": "color",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "decimals": 1,
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "value": null,
+                "color": "#2DD4BF"
+              },
+              {
+                "value": 0.7,
+                "color": "#60A5FA"
+              },
+              {
+                "value": 0.85,
+                "color": "#FBBF24"
+              },
+              {
+                "value": 0.95,
+                "color": "#FB7185"
+              }
+            ]
           }
         },
         "overrides": []
@@ -91,30 +1073,81 @@
       "id": 2,
       "type": "timeseries",
       "title": "CPU por instancia",
+      "gridPos": {
+        "x": 0,
+        "y": 42,
+        "w": 12,
+        "h": 9
+      },
+      "description": "Uso durante la sonda de CPU. La línea ámbar marca 85 %.",
       "datasource": {
         "type": "prometheus",
         "uid": "pfm2-prometheus"
       },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 0
-      },
       "targets": [
         {
           "refId": "A",
-          "expr": "pfm2_cpu_ratio{tenant=~\"$tenant\",entorno=~\"$entorno\"}",
-          "legendFormat": "{{tenant}} · {{rol}}"
+          "expr": "(pfm2_cpu_ratio{job=\"pfm2\",entorno=~\"${entorno:regex}\",tenant=~\"${tenant:regex}\"})\nand on() ((max(up{job=\"pfm2\"}) == 1) and on() (max(pfm2_colector_ok{job=\"pfm2\"}) == 1) and on() ((time() - max(pfm2_colector_timestamp_seconds{job=\"pfm2\"})) <= 180))",
+          "legendFormat": "{{tenant}} · {{rol}}",
+          "instant": false,
+          "range": true,
+          "format": "time_series",
+          "editorMode": "code",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "pfm2-prometheus"
+          }
         }
       ],
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
       "fieldConfig": {
         "defaults": {
           "unit": "percentunit",
+          "min": 0,
+          "color": {
+            "mode": "palette-classic-by-name"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "value": null,
+                "color": "#2DD4BF"
+              },
+              {
+                "value": 0.85,
+                "color": "#FBBF24"
+              }
+            ]
+          },
           "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
             "lineWidth": 2,
-            "fillOpacity": 10
-          }
+            "fillOpacity": 17,
+            "gradientMode": "opacity",
+            "showPoints": "auto",
+            "pointSize": 3,
+            "spanNulls": false,
+            "thresholdsStyle": {
+              "mode": "line"
+            },
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          },
+          "max": 1
         },
         "overrides": []
       }
@@ -123,197 +1156,226 @@
       "id": 3,
       "type": "timeseries",
       "title": "Memoria por instancia",
+      "gridPos": {
+        "x": 12,
+        "y": 42,
+        "w": 12,
+        "h": 9
+      },
+      "description": "Proporción de memoria ocupada según MemAvailable. La línea ámbar marca 85 %.",
       "datasource": {
         "type": "prometheus",
         "uid": "pfm2-prometheus"
       },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 0,
-        "y": 8
-      },
       "targets": [
         {
           "refId": "A",
-          "expr": "pfm2_memoria_ratio{tenant=~\"$tenant\",entorno=~\"$entorno\"}",
-          "legendFormat": "{{tenant}} · {{rol}}"
+          "expr": "(pfm2_memoria_ratio{job=\"pfm2\",entorno=~\"${entorno:regex}\",tenant=~\"${tenant:regex}\"})\nand on() ((max(up{job=\"pfm2\"}) == 1) and on() (max(pfm2_colector_ok{job=\"pfm2\"}) == 1) and on() ((time() - max(pfm2_colector_timestamp_seconds{job=\"pfm2\"})) <= 180))",
+          "legendFormat": "{{tenant}} · {{rol}}",
+          "instant": false,
+          "range": true,
+          "format": "time_series",
+          "editorMode": "code",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "pfm2-prometheus"
+          }
         }
       ],
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
       "fieldConfig": {
         "defaults": {
           "unit": "percentunit",
-          "custom": {
-            "lineWidth": 2,
-            "fillOpacity": 10
-          }
-        },
-        "overrides": []
-      }
-    },
-    {
-      "id": 4,
-      "type": "timeseries",
-      "title": "Latencia de la sonda de API",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "pfm2-prometheus"
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 8
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "pfm2_api_latencia_seconds{tenant=~\"$tenant\",entorno=~\"$entorno\"}",
-          "legendFormat": "{{tenant}} · {{rol}}"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "s",
-          "custom": {
-            "lineWidth": 2,
-            "fillOpacity": 10
-          }
-        },
-        "overrides": []
-      }
-    },
-    {
-      "id": 5,
-      "type": "timeseries",
-      "title": "Errores HTTP 5xx de API en cinco minutos",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "pfm2-prometheus"
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 0,
-        "y": 16
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "pfm2_api_errores_5m{tenant=~\"$tenant\",entorno=~\"$entorno\"}",
-          "legendFormat": "{{tenant}} · {{rol}}"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "custom": {
-            "lineWidth": 2,
-            "fillOpacity": 10
-          }
-        },
-        "overrides": []
-      }
-    },
-    {
-      "id": 6,
-      "type": "timeseries",
-      "title": "Estado de MySQL",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "pfm2-prometheus"
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 16
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "pfm2_servicio_up{tenant=~\"$tenant\",entorno=~\"$entorno\",rol=\"database\"}",
-          "legendFormat": "{{tenant}} · {{rol}}"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "none",
           "min": 0,
-          "max": 1,
+          "color": {
+            "mode": "palette-classic-by-name"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "value": null,
+                "color": "#2DD4BF"
+              },
+              {
+                "value": 0.85,
+                "color": "#FBBF24"
+              }
+            ]
+          },
           "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
             "lineWidth": 2,
-            "fillOpacity": 10
-          }
+            "fillOpacity": 17,
+            "gradientMode": "opacity",
+            "showPoints": "auto",
+            "pointSize": 3,
+            "spanNulls": false,
+            "thresholdsStyle": {
+              "mode": "line"
+            },
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          },
+          "max": 1
         },
         "overrides": []
       }
+    },
+    {
+      "id": 33,
+      "type": "row",
+      "title": "Incidencias · Reglas de Prometheus",
+      "gridPos": {
+        "x": 0,
+        "y": 51,
+        "w": 24,
+        "h": 1
+      },
+      "collapsed": false,
+      "panels": []
     },
     {
       "id": 7,
-      "type": "timeseries",
-      "title": "Alertas activas",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "pfm2-prometheus"
-      },
+      "type": "table",
+      "title": "Detalle de alertas activas",
       "gridPos": {
-        "h": 8,
-        "w": 12,
         "x": 0,
-        "y": 24
+        "y": 52,
+        "w": 24,
+        "h": 8
       },
-      "targets": [
-        {
-          "refId": "A",
-          "expr": "ALERTS{alertstate=\"firing\",tenant=~\"$tenant\",entorno=~\"$entorno\"}",
-          "legendFormat": "{{tenant}} · {{alertname}}"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "custom": {
-            "lineWidth": 2,
-            "fillOpacity": 10
-          }
-        },
-        "overrides": []
-      }
-    },
-    {
-      "id": 8,
-      "type": "timeseries",
-      "title": "Disponibilidad del muestreo",
+      "description": "La alerta del colector es global. Las demás respetan los filtros de entorno e institución. Una tabla vacía indica que la consulta no devolvió alertas en firing.",
       "datasource": {
         "type": "prometheus",
         "uid": "pfm2-prometheus"
       },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 24
-      },
       "targets": [
         {
           "refId": "A",
-          "expr": "pfm2_muestra_up{tenant=~\"$tenant\",entorno=~\"$entorno\"}",
-          "legendFormat": "{{tenant}} · {{rol}}"
+          "expr": "ALERTS{alertstate=\"firing\",tenant!=\"\",entorno=~\"${entorno:regex}\",tenant=~\"${tenant:regex}\"}\nor ALERTS{alertstate=\"firing\",alertname=\"ColectorNoDisponible\"}",
+          "legendFormat": "",
+          "instant": true,
+          "range": false,
+          "format": "table",
+          "editorMode": "code",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "pfm2-prometheus"
+          }
         }
       ],
+      "options": {
+        "showHeader": true,
+        "cellHeight": "md",
+        "enablePagination": true,
+        "sortBy": [
+          {
+            "displayName": "Severidad",
+            "desc": false
+          }
+        ]
+      },
       "fieldConfig": {
         "defaults": {
-          "unit": "none",
-          "min": 0,
-          "max": 1,
           "custom": {
-            "lineWidth": 2,
-            "fillOpacity": 10
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            }
           }
         },
-        "overrides": []
-      }
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Severidad"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 130
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "critica": {
+                        "text": "Crítica",
+                        "color": "#FB7185",
+                        "index": 0
+                      },
+                      "advertencia": {
+                        "text": "Advertencia",
+                        "color": "#FBBF24",
+                        "index": 1
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "Value": true,
+              "__name__": true,
+              "alertstate": true,
+              "instance": true,
+              "job": true
+            },
+            "indexByName": {
+              "severidad": 0,
+              "alertname": 1,
+              "tenant": 2,
+              "entorno": 3,
+              "rol": 4
+            },
+            "renameByName": {
+              "severidad": "Severidad",
+              "alertname": "Regla",
+              "tenant": "Tenant",
+              "entorno": "Entorno",
+              "rol": "Capa"
+            }
+          }
+        }
+      ]
     }
-  ]
+  ],
+  "description": "Estado de los servicios y capacidad por institución, con telemetría del panel local.",
+  "tags": [
+    "uagrm",
+    "tenants",
+    "observabilidad"
+  ],
+  "graphTooltip": 1,
+  "style": "dark"
 }

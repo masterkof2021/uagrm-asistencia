@@ -8,6 +8,15 @@ Las reglas distinguen una sonda sin respuesta de un servicio caído. Los umbrale
 
 En **Tenants → Monitoreo → Eventos recientes** se muestran hasta 50 detecciones y resoluciones de las últimas 24 horas. El panel consulta las reglas de Prometheus cada 15 segundos y conserva en SQLite los eventos que observa, aunque la vista esté cerrada. La resolución se registra al observar que la alerta dejó de estar activa. Si Prometheus no responde o sus reglas aún no están disponibles, el panel conserva el historial y espera una lectura válida antes de registrar resoluciones. [API HTTP de Prometheus](https://prometheus.io/docs/prometheus/latest/querying/api/#rules).
 
+## Leer el tablero
+
+**Entorno** y **Tenant** filtran las instituciones. La alerta del colector se muestra en todas las selecciones. El tablero abre en la última hora y se actualiza cada 30 segundos.
+
+- **Disponibilidad** muestra el estado actual y el historial de cada capa. Verde indica operativo, rosa indica caída confirmada y ámbar indica una sonda sin señal útil. Un hueco en el historial indica ausencia de datos. El porcentaje de capas operativas incluye las sondas sin señal en el total.
+- **Experiencia de la API** muestra la sonda a través de Nginx, su latencia y los errores 5xx. Cada barra de errores corresponde a una ventana móvil de cinco minutos.
+- **Capacidad** compara las seis instancias de mayor uso en CPU y memoria y muestra las tendencias de toda la selección.
+- **Incidencias** lista las reglas activas de Prometheus por severidad, institución y capa.
+
 ## Arranque local en Windows
 
 Descarga los archivos de Windows y extráelos en `observabilidad/data/herramientas/prometheus` y `observabilidad/data/herramientas/grafana`. Conserva una sola versión de cada herramienta en esos directorios. [Prometheus 3.16.0](https://github.com/prometheus/prometheus/releases/tag/v3.16.0) · [Grafana OSS 13.2.1](https://grafana.com/grafana/download/13.2.1?edition=oss&platform=windows).
